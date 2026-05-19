@@ -1,0 +1,25 @@
+# =========================
+# Fichiers CLion
+# =========================
+.idea/
+cmake-build-*/
+
+# =========================
+# Dossiers de compilation
+# =========================
+build/
+bin/
+obj/
+out/
+
+# =========================
+# Fichiers compilés
+# =========================
+*.o
+*.out
+*.exe
+*.a
+*.so
+*.dylib
+*.dll
+*.lib

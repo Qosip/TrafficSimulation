@@ -1,18 +1,35 @@
-#include <iostream>
-
-// TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
+#include <SFML/Graphics.hpp>
 
 int main() {
-    // TIP Press <shortcut actionId="RenameElement"/> when your caret is at the <b>lang</b> variable name to see how CLion can help you rename it.
+    // Init window
+    sf::RenderWindow window(sf::VideoMode(800, 800), "Traffic simulation");
+    window.setFramerateLimit(60); // 60 fps
 
-    const auto lang = "C++";
-    std::cout << "Hello and welcome to " << lang << "!\n";
+    // Loop
+    while (window.isOpen()) {
 
-    for (int i = 1; i <= 5; i++) {
-        // TIP Press <shortcut actionId="Debug"/> to start debugging your code. We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.
-        std::cout << "i = " << i << std::endl;
+        // --- Event ---
+        sf::Event event;
+        while (window.pollEvent(event)) {
+            // Permet de fermer la fenêtre proprement
+            if (event.type == sf::Event::Closed) {
+                window.close();
+            }
+        }
+
+        // --- Update ---
+
+        // --- Draw ---
+        window.clear(sf::Color(50, 50, 50));
+
+        // Rectangle test
+        sf::RectangleShape testCar(sf::Vector2f(40.0f, 20.0f));
+        testCar.setFillColor(sf::Color::Red);
+        testCar.setPosition(380.0f, 390.0f); // Middle of the screen
+        window.draw(testCar);
+
+        window.display();
     }
 
     return 0;
-    // TIP See CLion help at <a href="https://www.jetbrains.com/help/clion/">jetbrains.com/help/clion/</a>. Also, you can try interactive lessons for CLion by selecting 'Help | Learn IDE Features' from the main menu.
 }
