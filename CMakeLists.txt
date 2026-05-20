@@ -8,7 +8,10 @@ find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
-add_executable(TrafficSimulation main.cpp ${SOURCES})
+add_executable(TrafficSimulation main.cpp ${SOURCES}
+        src/IAgent.hpp
+        src/World.cpp
+)
 
 target_include_directories(TrafficSimulation PRIVATE src/)
 
