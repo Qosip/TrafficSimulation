@@ -255,7 +255,7 @@ void Vehicle::update(float dt,
         const Intersection* interAhead = nullptr;
         float distToInter = 999.f;
 
-        for (float d = 10.f; d < 130.f; d += tileSize * 0.4f) {
+        for (float d = 10.f; d < 250.f; d += tileSize * 0.4f) {
             sf::Vector2f checkPos = position + lookDir * d;
             const Intersection* found = world.getIntersectionAt(checkPos.x, checkPos.y);
             if (found) {
@@ -286,11 +286,16 @@ void Vehicle::update(float dt,
                     committedIntersectionId = -1;
 
                     if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
-                        float stopDist = 30.f;
+                        // Distance d'arrêt adaptée à la taille du véhicule
+                        float vehicleHalfLength = shape.getSize().x / 2.f;
+                        float stopDist = 30.f + vehicleHalfLength;
                         if (distToInter <= stopDist) {
                             targetSpeed = 0.f;
-                        } else if (distToInter < 90.f) {
-                            float factor = (distToInter - stopDist) / 40.f;
+                            if (currentSpeed > 10.f) {
+                                currentSpeed = std::max(0.f, currentSpeed - (maxAcceleration * 5.f) * dt);
+                            }
+                        } else if (distToInter < stopDist + 80.f) {
+                            float factor = (distToInter - stopDist) / 80.f;
                             targetSpeed = std::min(targetSpeed, targetSpeed * factor);
                         }
                     } else if (interAhead->getType() == RegulationType::PRIORITY_RIGHT) {
