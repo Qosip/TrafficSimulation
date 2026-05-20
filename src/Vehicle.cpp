@@ -177,7 +177,18 @@ void Vehicle::update(float dt,
 
     // --- 3. LES 3 PHASES DE CONDUITE (Le Cerveau) ---
     float roadLimit = world.getSpeedLimitAt(position.x, position.y);
-    float targetSpeed = (roadLimit > 0.f) ? std::min(maxSpeed, roadLimit) : maxSpeed;
+    float targetSpeed;
+    if (isCommittedToPass) {
+        // Dans l'intersection → on utilise la limite de la route autour, pas celle de la tuile intersection
+        // On cherche la limite de la route d'avant (la dernière limite non-intersection)
+        targetSpeed = std::min(maxSpeed, lastRoadSpeedLimit);
+    } else {
+        targetSpeed = (roadLimit > 0.f) ? std::min(maxSpeed, roadLimit) : maxSpeed;
+        // Sauvegarder la dernière limite de route (pas intersection) pour la traversée
+        if (roadLimit > 0.f) {
+            lastRoadSpeedLimit = roadLimit;
+        }
+    }
     float corneringSpeed = maxSpeed * 0.35f;
 
     // A. Phase de Virage : Si le volant est tourné, vitesse basse
@@ -209,7 +220,7 @@ void Vehicle::update(float dt,
     // C. Phase de Perception : réaction aux obstacles détectés
     if (lastPerception.hasDirectObstacle) {
         float dist = lastPerception.directObstacleDistance;
-        float stopDistance = 30.f;    // Distance d'arrêt total
+        float stopDistance = 40.f;    // Distance d'arrêt total
         float brakeDistance = 120.f;  // Distance où on commence à freiner
 
         if (dist <= stopDistance) {
@@ -225,22 +236,19 @@ void Vehicle::update(float dt,
         }
     }
     // D. Phase Intersection : respecter la régulation
-    // On check si on est SUR une intersection
     const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
 
     if (interOn) {
-        // On est DANS l'intersection → on ne freine plus, on traverse
-        hasEnteredIntersection = true;
-        currentIntersectionId = interOn->getId();
-    } else {
-        // On n'est plus sur l'intersection → reset
-        if (hasEnteredIntersection) {
-            hasEnteredIntersection = false;
-            currentIntersectionId = -1;
-        }
+        isCommittedToPass = true;
+        committedIntersectionId = interOn->getId();
+    } else if (isCommittedToPass) {
+        isCommittedToPass = false;
+        committedIntersectionId = -1;
+    }
 
-        // Check si une intersection est devant nous (via les tuiles, pas le cône)
-        // On projette des points devant le véhicule sur la route
+    if (interOn && isCommittedToPass) {
+        // Pas de freinage, on traverse
+    } else if (!interOn) {
         float headRad = currentAngle * 3.14159265f / 180.f;
         sf::Vector2f lookDir(std::cos(headRad), std::sin(headRad));
 
@@ -258,37 +266,56 @@ void Vehicle::update(float dt,
         }
 
         if (interAhead) {
-            // Déterminer de quelle approach on vient en fonction de notre direction
-            Approach::Direction myDir = world.getApproachDirection(currentAngle);
-            bool allowed = interAhead->canPass(myDir, agents);
+            if (isCommittedToPass && committedIntersectionId == interAhead->getId()) {
+                // Déjà engagé → on fonce
+            } else {
+                Approach::Direction myDir = world.getApproachDirection(currentAngle);
+                bool allowed = interAhead->canPass(myDir, agents);
 
-            if (!allowed) {
-                if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
-                    // Feu rouge : freinage pour s'arrêter à la ligne
-                    float stopDist = 30.f;
-                    if (distToInter <= stopDist) {
-                        targetSpeed = 0.f;
-                    } else if (distToInter < 90.f) {
-                        float factor = (distToInter - stopDist) / 60.f;
-                        targetSpeed = std::min(targetSpeed, targetSpeed * factor);
+                // Distance nécessaire pour freiner à cette vitesse
+                float brakingDistance = (currentSpeed * currentSpeed) / (2.f * maxAcceleration * 1.8f);
+
+                if (allowed) {
+                    if (distToInter < 60.f) {
+                        isCommittedToPass = true;
+                        committedIntersectionId = interAhead->getId();
                     }
+                } else if (distToInter > brakingDistance) {
+                    // On peut encore s'arrêter → on freine
+                    isCommittedToPass = false;
+                    committedIntersectionId = -1;
 
-                } else if (interAhead->getType() == RegulationType::PRIORITY_RIGHT) {
-                    // Priorité à droite : freinage doux
-                    float stopDist = 35.f;
-                    float brakeDist = 120.f;
+                    if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
+                        float stopDist = 30.f;
+                        if (distToInter <= stopDist) {
+                            targetSpeed = 0.f;
+                        } else if (distToInter < 90.f) {
+                            float factor = (distToInter - stopDist) / 40.f;
+                            targetSpeed = std::min(targetSpeed, targetSpeed * factor);
+                        }
+                    } else if (interAhead->getType() == RegulationType::PRIORITY_RIGHT) {
+                        float stopDist = 35.f;
+                        float brakeDist = 120.f;
 
-                    if (distToInter <= stopDist) {
-                        targetSpeed = 0.f;
-                    } else if (distToInter < brakeDist) {
-                        float factor = (distToInter - stopDist) / (brakeDist - stopDist);
-                        float interSpeed = corneringSpeed + (targetSpeed - corneringSpeed) * factor;
-                        if (interSpeed < targetSpeed) {
-                            targetSpeed = interSpeed;
+                        if (distToInter <= stopDist) {
+                            targetSpeed = 0.f;
+                        } else if (distToInter < brakeDist) {
+                            float factor = (distToInter - stopDist) / (brakeDist - stopDist);
+                            float interSpeed = corneringSpeed + (targetSpeed - corneringSpeed) * factor;
+                            if (interSpeed < targetSpeed) {
+                                targetSpeed = interSpeed;
+                            }
                         }
                     }
+                } else {
+                    // Trop proche pour freiner → on s'engage et on passe
+                    isCommittedToPass = true;
+                    committedIntersectionId = interAhead->getId();
                 }
             }
+        } else {
+            isCommittedToPass = false;
+            committedIntersectionId = -1;
         }
     }
 

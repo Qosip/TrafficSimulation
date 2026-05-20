@@ -58,16 +58,17 @@ bool Intersection::canPass(Approach::Direction fromDirection,
     switch (type) {
         case RegulationType::TRAFFIC_LIGHT: {
             LightState state = getLightState(fromDirection);
-            return (state == LightState::GREEN || state == LightState::ORANGE);
+            return (state == LightState::GREEN);
         }
 
         case RegulationType::PRIORITY_RIGHT: {
+            // Quelle direction est à ma droite ?
             Approach::Direction rightDir;
             switch (fromDirection) {
-                case Approach::Direction::NORTH: rightDir = Approach::Direction::WEST;  break;
-                case Approach::Direction::SOUTH: rightDir = Approach::Direction::EAST;  break;
-                case Approach::Direction::EAST:  rightDir = Approach::Direction::NORTH; break;
-                case Approach::Direction::WEST:  rightDir = Approach::Direction::SOUTH; break;
+                case Approach::Direction::NORTH: rightDir = Approach::Direction::EAST;  break;
+                case Approach::Direction::SOUTH: rightDir = Approach::Direction::WEST;  break;
+                case Approach::Direction::EAST:  rightDir = Approach::Direction::SOUTH; break;
+                case Approach::Direction::WEST:  rightDir = Approach::Direction::NORTH; break;
             }
 
             const Approach* rightApproach = nullptr;
@@ -80,14 +81,19 @@ bool Intersection::canPass(Approach::Direction fromDirection,
 
             if (!rightApproach) return true;
 
-            // On check une zone plus large le long de la voie de droite
-            // pas juste la tuile d'entrée
-            sf::Vector2f entryCenter(
-                rightApproach->entryTile.x * 50.f + 25.f,
-                rightApproach->entryTile.y * 50.f + 25.f
-            );
+            // Quel heading aurait un véhicule qui arrive de la droite ?
+            // Si rightDir = WEST, l'agent vient de l'ouest donc il roule vers l'EST (heading ~0°)
+            // Si rightDir = EAST, l'agent vient de l'est donc il roule vers l'OUEST (heading ~180°)
+            // Si rightDir = NORTH, l'agent vient du nord donc il roule vers le SUD (heading ~90°)
+            // Si rightDir = SOUTH, l'agent vient du sud donc il roule vers le NORD (heading ~270°)
+            float expectedHeading;
+            switch (rightDir) {
+                case Approach::Direction::WEST:  expectedHeading = 0.f;   break;  // Roule vers l'EST
+                case Approach::Direction::EAST:  expectedHeading = 180.f; break;  // Roule vers l'OUEST
+                case Approach::Direction::NORTH: expectedHeading = 90.f;  break;  // Roule vers le SUD
+                case Approach::Direction::SOUTH: expectedHeading = 270.f; break;  // Roule vers le NORD
+            }
 
-            // Direction d'où vient la voie de droite (vers le carrefour)
             sf::Vector2f interCenter(0.f, 0.f);
             for (const auto& t : coveredTiles) {
                 interCenter.x += t.x * 50.f + 25.f;
@@ -96,34 +102,58 @@ bool Intersection::canPass(Approach::Direction fromDirection,
             interCenter.x /= coveredTiles.size();
             interCenter.y /= coveredTiles.size();
 
-            // On scanne les agents sur la voie de droite dans un rayon généreux
             for (const auto& agent : agents) {
-                sf::Vector2f pos = agent->getPosition();
-
-                // Distance à la tuile d'entrée de droite
-                sf::Vector2f diff = pos - entryCenter;
-                float distToEntry = std::sqrt(diff.x * diff.x + diff.y * diff.y);
+                   sf::Vector2f pos = agent->getPosition();
 
                 // Distance au centre de l'intersection
                 sf::Vector2f diffInter = pos - interCenter;
-                float distToInter = std::sqrt(diffInter.x * diffInter.x + diffInter.y * diffInter.y);
+                float distAgentToInter = std::sqrt(diffInter.x * diffInter.x + diffInter.y * diffInter.y);
 
-                // L'agent est proche de la voie de droite ET roule vers le carrefour
-                if ((distToEntry < 120.f || distToInter < 80.f) && agent->getSpeed() > 5.f) {
-                    // Vérifier que l'agent se dirige bien vers l'intersection (pas qu'il s'éloigne)
-                    float agentHeading = agent->getHeading();
-                    float agentRad = agentHeading * 3.14159265f / 180.f;
-                    sf::Vector2f agentDir(std::cos(agentRad), std::sin(agentRad));
+                // Trop loin → pas pertinent
+                if (distAgentToInter > 150.f) continue;
 
-                    sf::Vector2f toInter = interCenter - pos;
-                    float lenToInter = std::sqrt(toInter.x * toInter.x + toInter.y * toInter.y);
-                    if (lenToInter > 1.f) {
-                        toInter /= lenToInter;
-                        float dot = agentDir.x * toInter.x + agentDir.y * toInter.y;
-                        // dot > 0 = l'agent se dirige vers l'intersection
-                        if (dot > 0.3f) {
-                            return false;
-                        }
+                // Vérifier que l'agent a le bon heading (il vient bien de la droite)
+                float agentHeading = agent->getHeading();
+                float headingDiff = agentHeading - expectedHeading;
+                while (headingDiff < -180.f) headingDiff += 360.f;
+                while (headingDiff > 180.f) headingDiff -= 360.f;
+
+                if (std::abs(headingDiff) > 60.f) continue;
+
+                // L'agent est-il DANS l'intersection ? Si oui → on attend qu'il sorte
+                bool agentInIntersection = false;
+                for (const auto& t : coveredTiles) {
+                    float tx = t.x * 50.f + 25.f;
+                    float ty = t.y * 50.f + 25.f;
+                    float dx = pos.x - tx;
+                    float dy = pos.y - ty;
+                    if (std::sqrt(dx * dx + dy * dy) < 35.f) {
+                        agentInIntersection = true;
+                        break;
+                    }
+                }
+
+                if (agentInIntersection) {
+                    return false; // L'agent est dans l'intersection → on attend
+                }
+
+                // L'agent approche-t-il l'intersection ?
+                if (distAgentToInter > 80.f) {
+                    // Il est loin — check s'il est arrêté
+                    if (agent->getSpeed() < 5.f) continue; // Arrêté et loin → pas une menace
+                }
+
+                // Vérifier qu'il se dirige vers l'intersection
+                float agentRad = agentHeading * 3.14159265f / 180.f;
+                sf::Vector2f agentDir(std::cos(agentRad), std::sin(agentRad));
+                sf::Vector2f toInter = interCenter - pos;
+                float lenToInter = std::sqrt(toInter.x * toInter.x + toInter.y * toInter.y);
+
+                if (lenToInter > 1.f) {
+                    toInter /= lenToInter;
+                    float dot = agentDir.x * toInter.x + agentDir.y * toInter.y;
+                    if (dot > 0.2f) {
+                        return false;
                     }
                 }
             }

@@ -28,10 +28,11 @@ protected:
     // Perception
     VisionParams visionParams;
     PerceptionResult lastPerception;
+    float lastRoadSpeedLimit = 100.f;
 
     // Tracking intersection
-    int currentIntersectionId = -1;   // -1 = pas dans une intersection
-    bool hasEnteredIntersection = false;  // true = on est dedans, on ne freine plus
+    bool isCommittedToPass = false;
+    int committedIntersectionId = -1;
 public:
     Vehicle(float startX, float startY, float tSize = 50.f);
     virtual ~Vehicle() = default;

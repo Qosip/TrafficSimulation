@@ -8,7 +8,7 @@ float getRoadSpeedLimit(RoadType type) {
         case RoadType::CITY_50:      return 100.f;   // Modéré
         case RoadType::ROAD_80:      return 160.f;   // Rapide
         case RoadType::HIGHWAY_130:  return 260.f;   // Très rapide
-        case RoadType::INTERSECTION: return 40.f;    // Très lent dans le carrefour
+        case RoadType::INTERSECTION: return 100.f;    // Modéré
         default:                     return 0.f;     // Pas une route
     }
 }
