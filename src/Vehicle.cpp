@@ -3,6 +3,8 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include "Perception.hpp"
+#include "World.hpp"
 
 Vehicle::Vehicle(float startX, float startY, float tSize) :
     position(startX, startY), velocity(0.f, 0.f),
@@ -119,7 +121,11 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
     currentPathIndex = 0;
     hasFinishedPath = false;
     isHeadingInitialized = false;
-}void Vehicle::update(float dt) {
+}
+
+void Vehicle::update(float dt,
+                     const std::vector<std::unique_ptr<IAgent>>& agents,
+                     const World& world) {
     if (densePath.empty() || hasFinishedPath) return;
 
     // --- 1. ANCRAGE SUR LA ROUTE ---
@@ -136,6 +142,9 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
         }
     }
     currentPathIndex = closestIdx;
+
+    // --- PERCEPTION ---
+    lastPerception = Perception::scan(position, currentAngle, this, agents, world, visionParams);
 
     if (currentPathIndex >= densePath.size() - 2) {
         hasFinishedPath = true;
@@ -167,20 +176,19 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
     currentAngle += steering * dt;
 
     // --- 3. LES 3 PHASES DE CONDUITE (Le Cerveau) ---
-    float targetSpeed = maxSpeed;
-    float corneringSpeed = maxSpeed * 0.35f; // 35% de la vitesse max dans le virage
+    float roadLimit = world.getSpeedLimitAt(position.x, position.y);
+    float targetSpeed = (roadLimit > 0.f) ? std::min(maxSpeed, roadLimit) : maxSpeed;
+    float corneringSpeed = maxSpeed * 0.35f;
 
-    // A. Phase de Virage : Si le volant est tourné, on maintient la vitesse basse
+    // A. Phase de Virage : Si le volant est tourné, vitesse basse
     if (std::abs(angleDiff) > 4.f) {
         targetSpeed = corneringSpeed;
     }
     // B. Phase d'Anticipation (Freinage doux en ligne droite)
     else {
-        // On analyse la route à 80 pixels devant nous (20 micro-points)
         size_t farIdx = std::min(currentPathIndex + 20, densePath.size() - 1);
         size_t farNextIdx = std::min(farIdx + 2, densePath.size() - 1);
 
-        // Direction actuelle vs Direction future
         sf::Vector2f currentRoadDir = densePath[std::min(currentPathIndex + 2, densePath.size() - 1)] - densePath[currentPathIndex];
         sf::Vector2f futureRoadDir = densePath[farNextIdx] - densePath[farIdx];
 
@@ -191,10 +199,95 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
             currentRoadDir /= lenC;
             futureRoadDir /= lenF;
 
-            // Si la route future tourne, on fixe la vitesse cible à la vitesse de virage
             float dot = (currentRoadDir.x * futureRoadDir.x) + (currentRoadDir.y * futureRoadDir.y);
             if (dot < 0.98f) {
                 targetSpeed = corneringSpeed;
+            }
+        }
+    }
+
+    // C. Phase de Perception : réaction aux obstacles détectés
+    if (lastPerception.hasDirectObstacle) {
+        float dist = lastPerception.directObstacleDistance;
+        float stopDistance = 30.f;    // Distance d'arrêt total
+        float brakeDistance = 120.f;  // Distance où on commence à freiner
+
+        if (dist <= stopDistance) {
+            // Trop proche → arrêt complet
+            targetSpeed = 0.f;
+        } else if (dist < brakeDistance) {
+            // Freinage proportionnel : plus c'est proche, plus on freine
+            float factor = (dist - stopDistance) / (brakeDistance - stopDistance);
+            float perceptionSpeed = targetSpeed * factor;
+            if (perceptionSpeed < targetSpeed) {
+                targetSpeed = perceptionSpeed;
+            }
+        }
+    }
+    // D. Phase Intersection : respecter la régulation
+    // On check si on est SUR une intersection
+    const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
+
+    if (interOn) {
+        // On est DANS l'intersection → on ne freine plus, on traverse
+        hasEnteredIntersection = true;
+        currentIntersectionId = interOn->getId();
+    } else {
+        // On n'est plus sur l'intersection → reset
+        if (hasEnteredIntersection) {
+            hasEnteredIntersection = false;
+            currentIntersectionId = -1;
+        }
+
+        // Check si une intersection est devant nous (via les tuiles, pas le cône)
+        // On projette des points devant le véhicule sur la route
+        float headRad = currentAngle * 3.14159265f / 180.f;
+        sf::Vector2f lookDir(std::cos(headRad), std::sin(headRad));
+
+        const Intersection* interAhead = nullptr;
+        float distToInter = 999.f;
+
+        for (float d = 10.f; d < 130.f; d += tileSize * 0.4f) {
+            sf::Vector2f checkPos = position + lookDir * d;
+            const Intersection* found = world.getIntersectionAt(checkPos.x, checkPos.y);
+            if (found) {
+                interAhead = found;
+                distToInter = d;
+                break;
+            }
+        }
+
+        if (interAhead) {
+            // Déterminer de quelle approach on vient en fonction de notre direction
+            Approach::Direction myDir = world.getApproachDirection(currentAngle);
+            bool allowed = interAhead->canPass(myDir, agents);
+
+            if (!allowed) {
+                if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
+                    // Feu rouge : freinage pour s'arrêter à la ligne
+                    float stopDist = 30.f;
+                    if (distToInter <= stopDist) {
+                        targetSpeed = 0.f;
+                    } else if (distToInter < 90.f) {
+                        float factor = (distToInter - stopDist) / 60.f;
+                        targetSpeed = std::min(targetSpeed, targetSpeed * factor);
+                    }
+
+                } else if (interAhead->getType() == RegulationType::PRIORITY_RIGHT) {
+                    // Priorité à droite : freinage doux
+                    float stopDist = 35.f;
+                    float brakeDist = 120.f;
+
+                    if (distToInter <= stopDist) {
+                        targetSpeed = 0.f;
+                    } else if (distToInter < brakeDist) {
+                        float factor = (distToInter - stopDist) / (brakeDist - stopDist);
+                        float interSpeed = corneringSpeed + (targetSpeed - corneringSpeed) * factor;
+                        if (interSpeed < targetSpeed) {
+                            targetSpeed = interSpeed;
+                        }
+                    }
+                }
             }
         }
     }
@@ -245,13 +338,22 @@ void Vehicle::setSelected(bool selected) {
 void Vehicle::drawDebug(sf::RenderWindow& window) {
     if (!isSelected || densePath.empty() || hasFinishedPath) return;
 
-    // sf::LineStrip relie tous les points d'un tableau pour former une ligne continue
-    sf::VertexArray pathLine(sf::LineStrip, densePath.size() - currentPathIndex);
+    // Dessin du cône de vision
+    Perception::drawDebugCone(window, position, currentAngle, visionParams, lastPerception);
 
+    // Dessin du chemin restant
+    sf::VertexArray pathLine(sf::LineStrip, densePath.size() - currentPathIndex);
     for (size_t i = currentPathIndex; i < densePath.size(); ++i) {
         pathLine[i - currentPathIndex].position = densePath[i];
         pathLine[i - currentPathIndex].color = sf::Color::Magenta;
     }
-
     window.draw(pathLine);
+}
+
+float Vehicle::getHeading() const {
+    return currentAngle;
+}
+
+float Vehicle::getSpeed() const {
+    return currentSpeed;
 }

@@ -1,50 +1,56 @@
 // src/World.cpp
+#include <cmath>
 #include "World.hpp"
 
-World::World(int windowWidth, int windowHeight, float tSize) : tileSize(tSize) {
-    gridWidth = windowWidth / (int)tileSize;
-    gridHeight = windowHeight / (int)tileSize;
-
-    // 1. On remplit d'herbe
-    grid.resize(gridWidth, std::vector<TileType>(gridHeight, TileType::GRASS));
-
-    int centerX = gridWidth / 2;
-    int centerY = gridHeight / 2;
-
-    // 2. Création des routes avec sens de circulation (Conduite à droite)
-    for (int x = 0; x < gridWidth; ++x) {
-        if (x != centerX && x != centerX - 1) {
-            // Axe Horizontal
-            setTile(x, centerY - 1, TileType::ROAD_LEFT);  // Voie du HAUT va vers la GAUCHE
-            setTile(x, centerY, TileType::ROAD_RIGHT);     // Voie du BAS va vers la DROITE
-        }
+float getRoadSpeedLimit(RoadType type) {
+    switch (type) {
+        case RoadType::CITY_30:      return 60.f;    // Lent
+        case RoadType::CITY_50:      return 100.f;   // Modéré
+        case RoadType::ROAD_80:      return 160.f;   // Rapide
+        case RoadType::HIGHWAY_130:  return 260.f;   // Très rapide
+        case RoadType::INTERSECTION: return 40.f;    // Très lent dans le carrefour
+        default:                     return 0.f;     // Pas une route
     }
-    for (int y = 0; y < gridHeight; ++y) {
-        if (y != centerY && y != centerY - 1) {
-            // Axe Vertical
-            setTile(centerX - 1, y, TileType::ROAD_DOWN);  // Voie de GAUCHE va vers le BAS
-            setTile(centerX, y, TileType::ROAD_UP);        // Voie de DROITE va vers le HAUT
-        }
-    }
-
-    // 3. Le coeur du carrefour
-    setTile(centerX, centerY, TileType::INTERSECTION);
-    setTile(centerX - 1, centerY, TileType::INTERSECTION);
-    setTile(centerX, centerY - 1, TileType::INTERSECTION);
-    setTile(centerX - 1, centerY - 1, TileType::INTERSECTION);
 }
 
-void World::setTile(int gridX, int gridY, TileType type) {
+sf::Color getRoadColor(RoadType type) {
+    switch (type) {
+        case RoadType::CITY_30:      return sf::Color(70, 70, 70);    // Gris clair — pavés
+        case RoadType::CITY_50:      return sf::Color(50, 50, 50);    // Asphalte standard
+        case RoadType::ROAD_80:      return sf::Color(40, 40, 40);    // Asphalte foncé
+        case RoadType::HIGHWAY_130:  return sf::Color(35, 35, 45);    // Asphalte bleuté
+        case RoadType::INTERSECTION: return sf::Color(80, 80, 80);    // Gris clair
+        default:                     return sf::Color(34, 139, 34);   // Herbe
+    }
+}
+
+// Tuile par défaut retournée quand on sort de la grille
+static const Tile DEFAULT_TILE = { RoadType::NONE, TileDirection::NONE };
+
+World::World(int tilesX, int tilesY, float tSize)
+    : gridWidth(tilesX), gridHeight(tilesY), tileSize(tSize)
+{
+    grid.resize(gridWidth, std::vector<Tile>(gridHeight));
+}
+
+void World::setTile(int gridX, int gridY, RoadType type, TileDirection dir) {
     if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
-        grid[gridX][gridY] = type;
+        grid[gridX][gridY].roadType = type;
+        grid[gridX][gridY].direction = dir;
     }
 }
 
-TileType World::getTile(int gridX, int gridY) const {
+const Tile& World::getTile(int gridX, int gridY) const {
     if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
         return grid[gridX][gridY];
     }
-    return TileType::GRASS; // Sécurité : si on sort de la carte, c'est de l'herbe
+    return DEFAULT_TILE;
+}
+
+float World::getSpeedLimitAt(float worldX, float worldY) const {
+    int gx = (int)(worldX / tileSize);
+    int gy = (int)(worldY / tileSize);
+    return getRoadSpeedLimit(getTile(gx, gy).roadType);
 }
 
 void World::draw(sf::RenderWindow& window) {
@@ -52,42 +58,86 @@ void World::draw(sf::RenderWindow& window) {
     tileShape.setOutlineThickness(-1.f);
     tileShape.setOutlineColor(sf::Color(0, 0, 0, 50));
 
-    // Création d'un petit triangle pour indiquer le sens de la route
-    sf::CircleShape dirIndicator(tileSize / 4.f, 3); // Un rayon de taille/4, et 3 sommets = Triangle
-    dirIndicator.setFillColor(sf::Color(255, 204, 0)); // Jaune marquage au sol
+    sf::CircleShape dirIndicator(tileSize / 4.f, 3);
+    dirIndicator.setFillColor(sf::Color(255, 204, 0));
     dirIndicator.setOrigin(dirIndicator.getRadius(), dirIndicator.getRadius());
 
     for (int x = 0; x < gridWidth; ++x) {
         for (int y = 0; y < gridHeight; ++y) {
-            // Positionnement du bloc de base
             float posX = x * tileSize;
             float posY = y * tileSize;
             tileShape.setPosition(posX, posY);
 
-            // Choix de la couleur du fond
-            TileType type = grid[x][y];
-            if (type == TileType::GRASS) {
-                tileShape.setFillColor(sf::Color(34, 139, 34));
-            } else if (type == TileType::INTERSECTION) {
-                tileShape.setFillColor(sf::Color(80, 80, 80)); // Gris légèrement plus clair
-            } else {
-                tileShape.setFillColor(sf::Color(50, 50, 50)); // Asphalte
-            }
+            const Tile& tile = grid[x][y];
+            tileShape.setFillColor(getRoadColor(tile.roadType));
             window.draw(tileShape);
 
-            // Dessin du triangle directionnel si c'est une route
-            if (type != TileType::GRASS && type != TileType::INTERSECTION) {
-                // On place le triangle au centre de la tuile
+            // Triangle directionnel
+            if (tile.direction != TileDirection::NONE) {
                 dirIndicator.setPosition(posX + tileSize / 2.f, posY + tileSize / 2.f);
 
-                // On l'oriente en fonction de la direction de la route
-                if (type == TileType::ROAD_RIGHT) dirIndicator.setRotation(90.f);
-                else if (type == TileType::ROAD_DOWN) dirIndicator.setRotation(180.f);
-                else if (type == TileType::ROAD_LEFT) dirIndicator.setRotation(270.f);
-                else if (type == TileType::ROAD_UP) dirIndicator.setRotation(0.f);
+                if (tile.direction == TileDirection::RIGHT) dirIndicator.setRotation(90.f);
+                else if (tile.direction == TileDirection::DOWN) dirIndicator.setRotation(180.f);
+                else if (tile.direction == TileDirection::LEFT) dirIndicator.setRotation(270.f);
+                else if (tile.direction == TileDirection::UP) dirIndicator.setRotation(0.f);
 
                 window.draw(dirIndicator);
             }
         }
     }
+}
+
+int World::getGridWidth() const { return gridWidth; }
+int World::getGridHeight() const { return gridHeight; }
+float World::getTileSize() const { return tileSize; }
+float World::getWorldPixelWidth() const { return gridWidth * tileSize; }
+float World::getWorldPixelHeight() const { return gridHeight * tileSize; }
+void World::addIntersection(const Intersection& intersection) {
+    intersections.push_back(intersection);
+}
+
+void World::updateIntersections(float dt) {
+    for (auto& inter : intersections) {
+        inter.update(dt);
+    }
+}
+
+void World::drawIntersections(sf::RenderWindow& window) const {
+    for (const auto& inter : intersections) {
+        inter.draw(window, tileSize);
+    }
+}
+
+const Intersection* World::getIntersectionAt(float worldX, float worldY) const {
+    int gx = (int)(worldX / tileSize);
+    int gy = (int)(worldY / tileSize);
+    for (const auto& inter : intersections) {
+        if (inter.coversTile(gx, gy)) return &inter;
+    }
+    return nullptr;
+}
+
+const Intersection* World::getIntersectionNear(float worldX, float worldY, float radius) const {
+    for (const auto& inter : intersections) {
+        for (const auto& tile : inter.getCoveredTiles()) {
+            float cx = tile.x * tileSize + tileSize / 2.f;
+            float cy = tile.y * tileSize + tileSize / 2.f;
+            float dx = worldX - cx;
+            float dy = worldY - cy;
+            if (std::sqrt(dx * dx + dy * dy) < radius) {
+                return &inter;
+            }
+        }
+    }
+    return nullptr;
+}
+
+Approach::Direction World::getApproachDirection(float headingDeg) const {
+    while (headingDeg < 0.f) headingDeg += 360.f;
+    while (headingDeg >= 360.f) headingDeg -= 360.f;
+
+    if (headingDeg >= 315.f || headingDeg < 45.f) return Approach::Direction::EAST;
+    if (headingDeg >= 45.f && headingDeg < 135.f) return Approach::Direction::SOUTH;
+    if (headingDeg >= 135.f && headingDeg < 225.f) return Approach::Direction::WEST;
+    return Approach::Direction::NORTH;
 }

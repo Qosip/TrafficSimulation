@@ -11,6 +11,9 @@ file(GLOB_RECURSE SOURCES "src/*.cpp")
 add_executable(TrafficSimulation main.cpp ${SOURCES}
         src/IAgent.hpp
         src/World.cpp
+        src/Camera.cpp
+        src/Perception.cpp
+        src/Intersection.cpp
 )
 
 target_include_directories(TrafficSimulation PRIVATE src/)
