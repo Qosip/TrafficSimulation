@@ -75,4 +75,5 @@ public:
 
     // Pour la perception : déterminer de quelle direction on approche une intersection
     Approach::Direction getApproachDirection(float headingDeg) const;
+    std::vector<sf::Vector2i> getValidNeighbors(int x, int y) const;
 };

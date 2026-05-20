@@ -219,19 +219,30 @@ void Vehicle::update(float dt,
 
     // C. Phase de Perception : réaction aux obstacles détectés
     if (lastPerception.hasDirectObstacle) {
-        float dist = lastPerception.directObstacleDistance;
-        float stopDistance = 40.f;    // Distance d'arrêt total
-        float brakeDistance = 120.f;  // Distance où on commence à freiner
 
-        if (dist <= stopDistance) {
-            // Trop proche → arrêt complet
+        float gap = lastPerception.directObstacleDistance;
+        float desiredGap = 20.f; // L'espace constant exact souhaité
+
+        if (gap <= desiredGap) {
             targetSpeed = 0.f;
-        } else if (dist < brakeDistance) {
-            // Freinage proportionnel : plus c'est proche, plus on freine
-            float factor = (dist - stopDistance) / (brakeDistance - stopDistance);
-            float perceptionSpeed = targetSpeed * factor;
-            if (perceptionSpeed < targetSpeed) {
-                targetSpeed = perceptionSpeed;
+
+            // Freinage d'urgence si on a mordu sur le gap (ex: l'agent devant a pilé)
+            if (currentSpeed > 0.f) {
+                currentSpeed = std::max(0.f, currentSpeed - (maxAcceleration * 5.f) * dt);
+            }
+        } else {
+            // --- Calcul cinématique parfait ---
+            // On calcule sur une décélération de prévision de 1.5x
+            // Sachant que nos freins effectifs peuvent aller jusqu'à 1.8x,
+            // cela nous donne une marge de sécurité pour lisser la courbe d'arrêt.
+            float safeDeceleration = maxAcceleration * 1.5f;
+            float availableDist = gap - desiredGap;
+
+            // Vitesse = racine_carrée(2 * a * d)
+            float safeSpeed = std::sqrt(2.f * safeDeceleration * availableDist);
+
+            if (safeSpeed < targetSpeed) {
+                targetSpeed = safeSpeed;
             }
         }
     }
@@ -388,4 +399,8 @@ float Vehicle::getHeading() const {
 
 float Vehicle::getSpeed() const {
     return currentSpeed;
+}
+
+float Vehicle::getLength() const {
+    return shape.getSize().x;
 }

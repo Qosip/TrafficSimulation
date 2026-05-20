@@ -28,4 +28,5 @@ public:
     virtual bool contains(sf::Vector2f point) const = 0;
     virtual void setSelected(bool selected) = 0;
     virtual void drawDebug(sf::RenderWindow& window) = 0;
+    virtual float getLength() const = 0;
 };

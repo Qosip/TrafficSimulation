@@ -53,4 +53,5 @@ public:
 
     float getHeading() const override;
     float getSpeed() const override;
+    float getLength() const override;
 };

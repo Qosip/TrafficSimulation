@@ -6,6 +6,7 @@
 #include "Truck.hpp"
 #include "World.hpp"
 #include "Camera.hpp"
+#include "PathFinder.hpp"
 
 int main() {
     const int WINDOW_W = 800;
@@ -103,13 +104,30 @@ int main() {
     // --- AGENTS ---
     std::vector<std::unique_ptr<IAgent>> agents;
 
-    // Voiture 1 : y=11 vers l'EST
+    // Voiture 1 (Anciennement: {{1,11},{5,11},{8,11},{15,11},{20,11},{25,11},{30,11}})
     {
         float sx = 1 * TILE_SIZE + TILE_SIZE / 2.f;
         float sy = 11 * TILE_SIZE + TILE_SIZE / 2.f;
         auto c = std::make_unique<Car>(sx, sy);
-        dynamic_cast<Car*>(c.get())->setPath({{1,11},{5,11},{8,11},{15,11},{20,11},{25,11},{30,11}});
+
+        // Génération automatique du chemin du point A (1, 11) au point B (30, 11)
+        std::vector<sf::Vector2i> autoPath = Pathfinder::findPath(world, {1, 11}, {21, 30});
+        dynamic_cast<Car*>(c.get())->setPath(autoPath);
+
         agents.push_back(std::move(c));
+    }
+
+    // Camion 2 (OUEST vers le SUD avec virage par exemple)
+    {
+        float sx = 30 * TILE_SIZE + TILE_SIZE / 2.f;
+        float sy = 10 * TILE_SIZE + TILE_SIZE / 2.f;
+        auto t = std::make_unique<Truck>(sx, sy);
+
+        // De l'Est vers le Sud (le Pathfinder gérera les carrefours pour tourner !)
+        std::vector<sf::Vector2i> autoPath = Pathfinder::findPath(world, {30, 10}, {10, 30});
+        dynamic_cast<Truck*>(t.get())->setPath(autoPath);
+
+        agents.push_back(std::move(t));
     }
 
     // Voiture 2 : y=10 vers l'OUEST
@@ -140,13 +158,13 @@ int main() {
     }
 
     // Voiture 5 : x=22 vers le NORD, tourne OUEST au carrefour (22,11)
-    {
+    /*{
         float sx = 22 * TILE_SIZE + TILE_SIZE / 2.f;
         float sy = 30 * TILE_SIZE + TILE_SIZE / 2.f;
         auto c = std::make_unique<Car>(sx, sy);
         dynamic_cast<Car*>(c.get())->setPath({{22,30},{22,25},{22,20},{22,15},{22,10},{18,10},{14,10},{8,10},{1,10}});
         agents.push_back(std::move(c));
-    }
+    }*/
 
     // Camion 1 : y=22 vers l'EST
     {
@@ -154,15 +172,6 @@ int main() {
         float sy = 22 * TILE_SIZE + TILE_SIZE / 2.f;
         auto t = std::make_unique<Truck>(sx, sy);
         dynamic_cast<Truck*>(t.get())->setPath({{1,22},{5,22},{8,22},{15,22},{20,22},{28,22}});
-        agents.push_back(std::move(t));
-    }
-
-    // Camion 2 : y=21 vers l'OUEST
-    {
-        float sx = 30 * TILE_SIZE + TILE_SIZE / 2.f;
-        float sy = 21 * TILE_SIZE + TILE_SIZE / 2.f;
-        auto t = std::make_unique<Truck>(sx, sy);
-        dynamic_cast<Truck*>(t.get())->setPath({{30,21},{25,21},{20,21},{15,21},{8,21},{3,21},{1,21}});
         agents.push_back(std::move(t));
     }
 

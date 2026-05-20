@@ -141,3 +141,54 @@ Approach::Direction World::getApproachDirection(float headingDeg) const {
     if (headingDeg >= 135.f && headingDeg < 225.f) return Approach::Direction::WEST;
     return Approach::Direction::NORTH;
 }
+
+std::vector<sf::Vector2i> World::getValidNeighbors(int x, int y) const {
+    std::vector<sf::Vector2i> neighbors;
+    const Tile& currentTile = getTile(x, y);
+
+    if (currentTile.roadType == RoadType::NONE) return neighbors;
+
+    // Définitions des mouvements possibles et de la direction d'entrée requise
+    struct Move { int dx; int dy; TileDirection requiredExitDir; };
+    std::vector<Move> moves = {
+        {0, -1, TileDirection::UP},
+        {0, 1, TileDirection::DOWN},
+        {-1, 0, TileDirection::LEFT},
+        {1, 0, TileDirection::RIGHT}
+    };
+
+    for (const auto& move : moves) {
+        int nx = x + move.dx;
+        int ny = y + move.dy;
+
+        // Éviter de sortir de la grille
+        if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;
+
+        const Tile& nextTile = getTile(nx, ny);
+        if (nextTile.roadType == RoadType::NONE) continue;
+
+        // CAS 1 : On est sur une route classique (sens unique)
+        if (currentTile.roadType != RoadType::INTERSECTION) {
+            // On ne peut avancer QUE dans la direction de notre tuile actuelle
+            if (currentTile.direction == TileDirection::UP && (move.dx != 0 || move.dy != -1)) continue;
+            if (currentTile.direction == TileDirection::DOWN && (move.dx != 0 || move.dy != 1)) continue;
+            if (currentTile.direction == TileDirection::LEFT && (move.dx != -1 || move.dy != 0)) continue;
+            if (currentTile.direction == TileDirection::RIGHT && (move.dx != 1 || move.dy != 0)) continue;
+
+            // Sécurité : la route suivante doit être dans le même sens, ou être une intersection
+            if (nextTile.roadType != RoadType::INTERSECTION && nextTile.direction != currentTile.direction) continue;
+        }
+        // CAS 2 : On est dans une intersection
+        else {
+            // On peut aller vers une autre tuile d'intersection librement
+            // MAIS si on veut sortir vers une route, elle DOIT pointer vers l'extérieur
+            if (nextTile.roadType != RoadType::INTERSECTION && nextTile.direction != move.requiredExitDir) {
+                continue;
+            }
+        }
+
+        neighbors.push_back({nx, ny});
+    }
+
+    return neighbors;
+}

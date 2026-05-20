@@ -55,9 +55,19 @@ PerceptionResult Perception::scan(
 
         // Check du cône étroit (obstacle direct devant)
         if (std::abs(relAngle) <= params.directHalfAngle) {
-            if (!result.hasDirectObstacle || dist < result.directObstacleDistance) {
+
+            // --- Calcul de la distance pare-chocs à pare-chocs ---
+            // dist = distance centre à centre
+            float myHalfLength = myself->getLength() / 2.f;
+            float otherHalfLength = agent->getLength() / 2.f;
+
+            float bumperDist = dist - myHalfLength - otherHalfLength;
+            bumperDist = std::max(0.f, bumperDist); // Sécurité anti-valeur négative
+
+            if (!result.hasDirectObstacle || bumperDist < result.directObstacleDistance) {
                 result.hasDirectObstacle = true;
-                result.directObstacleDistance = dist;
+                // On stocke maintenant l'ESPACE VIDE RÉEL, plus la distance des centres !
+                result.directObstacleDistance = bumperDist;
             }
         }
     }
