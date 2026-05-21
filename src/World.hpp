@@ -45,6 +45,9 @@ private:
     std::vector<std::vector<Tile>> grid;
     std::vector<Intersection> intersections;
 
+    mutable sf::RenderTexture mapTexture;
+    mutable sf::Sprite mapSprite;
+    mutable bool isTextureInitialized = false;
 public:
     World(int tilesX, int tilesY, float tSize);
 
@@ -76,4 +79,9 @@ public:
     // Pour la perception : déterminer de quelle direction on approche une intersection
     Approach::Direction getApproachDirection(float headingDeg) const;
     std::vector<sf::Vector2i> getValidNeighbors(int x, int y) const;
+
+    // Récupérer toutes les intersections pour la sauvegarde
+    const std::vector<Intersection>& getIntersections() const { return intersections; }
+
+    void redrawMap() const;
 };

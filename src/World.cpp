@@ -54,37 +54,11 @@ float World::getSpeedLimitAt(float worldX, float worldY) const {
 }
 
 void World::draw(sf::RenderWindow& window) {
-    sf::RectangleShape tileShape(sf::Vector2f(tileSize, tileSize));
-    tileShape.setOutlineThickness(-1.f);
-    tileShape.setOutlineColor(sf::Color(0, 0, 0, 50));
-
-    sf::CircleShape dirIndicator(tileSize / 4.f, 3);
-    dirIndicator.setFillColor(sf::Color(255, 204, 0));
-    dirIndicator.setOrigin(dirIndicator.getRadius(), dirIndicator.getRadius());
-
-    for (int x = 0; x < gridWidth; ++x) {
-        for (int y = 0; y < gridHeight; ++y) {
-            float posX = x * tileSize;
-            float posY = y * tileSize;
-            tileShape.setPosition(posX, posY);
-
-            const Tile& tile = grid[x][y];
-            tileShape.setFillColor(getRoadColor(tile.roadType));
-            window.draw(tileShape);
-
-            // Triangle directionnel
-            if (tile.direction != TileDirection::NONE) {
-                dirIndicator.setPosition(posX + tileSize / 2.f, posY + tileSize / 2.f);
-
-                if (tile.direction == TileDirection::RIGHT) dirIndicator.setRotation(90.f);
-                else if (tile.direction == TileDirection::DOWN) dirIndicator.setRotation(180.f);
-                else if (tile.direction == TileDirection::LEFT) dirIndicator.setRotation(270.f);
-                else if (tile.direction == TileDirection::UP) dirIndicator.setRotation(0.f);
-
-                window.draw(dirIndicator);
-            }
-        }
+    if (!isTextureInitialized) {
+        redrawMap();
     }
+
+    window.draw(mapSprite);
 }
 
 int World::getGridWidth() const { return gridWidth; }
@@ -148,7 +122,6 @@ std::vector<sf::Vector2i> World::getValidNeighbors(int x, int y) const {
 
     if (currentTile.roadType == RoadType::NONE) return neighbors;
 
-    // Définitions des mouvements possibles et de la direction d'entrée requise
     struct Move { int dx; int dy; TileDirection requiredExitDir; };
     std::vector<Move> moves = {
         {0, -1, TileDirection::UP},
@@ -167,21 +140,28 @@ std::vector<sf::Vector2i> World::getValidNeighbors(int x, int y) const {
         const Tile& nextTile = getTile(nx, ny);
         if (nextTile.roadType == RoadType::NONE) continue;
 
-        // CAS 1 : On est sur une route classique (sens unique)
         if (currentTile.roadType != RoadType::INTERSECTION) {
-            // On ne peut avancer QUE dans la direction de notre tuile actuelle
+            // Règle 1 : On ne peut avancer QUE dans la direction de notre tuile actuelle
             if (currentTile.direction == TileDirection::UP && (move.dx != 0 || move.dy != -1)) continue;
             if (currentTile.direction == TileDirection::DOWN && (move.dx != 0 || move.dy != 1)) continue;
             if (currentTile.direction == TileDirection::LEFT && (move.dx != -1 || move.dy != 0)) continue;
             if (currentTile.direction == TileDirection::RIGHT && (move.dx != 1 || move.dy != 0)) continue;
 
-            // Sécurité : la route suivante doit être dans le même sens, ou être une intersection
-            if (nextTile.roadType != RoadType::INTERSECTION && nextTile.direction != currentTile.direction) continue;
+            // --- LA MAGIE EST ICI ---
+            // Règle 2 : On autorise la tuile suivante à avoir une direction différente (Virage 90° !)
+            // Mais on bloque les demi-tours immédiats pour éviter les comportements aberrants.
+            if (nextTile.roadType != RoadType::INTERSECTION) {
+                bool isUTurn = false;
+                if (currentTile.direction == TileDirection::UP && nextTile.direction == TileDirection::DOWN) isUTurn = true;
+                if (currentTile.direction == TileDirection::DOWN && nextTile.direction == TileDirection::UP) isUTurn = true;
+                if (currentTile.direction == TileDirection::LEFT && nextTile.direction == TileDirection::RIGHT) isUTurn = true;
+                if (currentTile.direction == TileDirection::RIGHT && nextTile.direction == TileDirection::LEFT) isUTurn = true;
+
+                if (isUTurn) continue;
+            }
         }
-        // CAS 2 : On est dans une intersection
         else {
-            // On peut aller vers une autre tuile d'intersection librement
-            // MAIS si on veut sortir vers une route, elle DOIT pointer vers l'extérieur
+            // Logique de sortie d'intersection
             if (nextTile.roadType != RoadType::INTERSECTION && nextTile.direction != move.requiredExitDir) {
                 continue;
             }
@@ -191,4 +171,54 @@ std::vector<sf::Vector2i> World::getValidNeighbors(int x, int y) const {
     }
 
     return neighbors;
+}
+
+void World::redrawMap() const {
+    // Initialisation de la texture à la bonne taille en pixels si ce n'est pas fait
+    if (!isTextureInitialized) {
+        mapTexture.create(gridWidth * tileSize, gridHeight * tileSize);
+        isTextureInitialized = true;
+    }
+
+    // On efface le cache en peignant le fond en herbe (vert)
+    mapTexture.clear(sf::Color(34, 139, 34));
+
+    sf::RectangleShape tileShape(sf::Vector2f(tileSize, tileSize));
+    tileShape.setOutlineThickness(-1.f);
+    tileShape.setOutlineColor(sf::Color(0, 0, 0, 50));
+
+    sf::CircleShape dirIndicator(tileSize / 4.f, 3);
+    dirIndicator.setFillColor(sf::Color(255, 204, 0));
+    dirIndicator.setOrigin(dirIndicator.getRadius(), dirIndicator.getRadius());
+
+    // On dessine toutes les routes existantes sur notre texture de cache
+    for (int x = 0; x < gridWidth; ++x) {
+        for (int y = 0; y < gridHeight; ++y) {
+            const Tile& tile = grid[x][y];
+            if (tile.roadType == RoadType::NONE) continue; // On ignore l'herbe vide
+
+            float posX = x * tileSize;
+            float posY = y * tileSize;
+            tileShape.setPosition(posX, posY);
+            tileShape.setFillColor(getRoadColor(tile.roadType));
+
+            // CRUCIAL : On dessine sur la mapTexture en mémoire !
+            mapTexture.draw(tileShape);
+
+            if (tile.direction != TileDirection::NONE) {
+                dirIndicator.setPosition(posX + tileSize / 2.f, posY + tileSize / 2.f);
+
+                if (tile.direction == TileDirection::RIGHT) dirIndicator.setRotation(90.f);
+                else if (tile.direction == TileDirection::DOWN) dirIndicator.setRotation(180.f);
+                else if (tile.direction == TileDirection::LEFT) dirIndicator.setRotation(270.f);
+                else if (tile.direction == TileDirection::UP) dirIndicator.setRotation(0.f);
+
+                mapTexture.draw(dirIndicator);
+            }
+        }
+    }
+
+    // On finalise la texture SFML
+    mapTexture.display();
+    mapSprite.setTexture(mapTexture.getTexture());
 }

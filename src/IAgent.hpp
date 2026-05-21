@@ -29,4 +29,14 @@ public:
     virtual void setSelected(bool selected) = 0;
     virtual void drawDebug(sf::RenderWindow& window) = 0;
     virtual float getLength() const = 0;
+
+    // Sauvegarde
+    virtual std::string getType() const = 0;
+    virtual sf::Vector2i getStartTile() const = 0;
+    virtual sf::Vector2i getGoalTile() const = 0;
+
+    // Mode Construction
+    virtual sf::Vector2i getCurrentTile() const = 0;
+    virtual void recalculatePath(const World& world) = 0;
+    virtual void resetToStart(const World& world) = 0;
 };

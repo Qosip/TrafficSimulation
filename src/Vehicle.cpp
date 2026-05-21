@@ -3,6 +3,8 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+
+#include "Pathfinder.hpp"
 #include "Perception.hpp"
 #include "World.hpp"
 
@@ -16,6 +18,10 @@ Vehicle::Vehicle(float startX, float startY, float tSize) :
 void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
     densePath.clear();
     if (newPath.empty()) return;
+
+    // On mémorise la première et la dernière tuile du chemin donné
+    startTile = newPath.front();
+    goalTile = newPath.back();
 
     // Convertir les coordonnées de la grille en positions réelles (pixels) au centre des tuiles
     std::vector<sf::Vector2f> waypoints;
@@ -403,4 +409,58 @@ float Vehicle::getSpeed() const {
 
 float Vehicle::getLength() const {
     return shape.getSize().x;
+}
+
+sf::Vector2i Vehicle::getCurrentTile() const {
+    // Convertit la position pixel en coordonnées de la grille
+    return sf::Vector2i((int)(position.x / tileSize), (int)(position.y / tileSize));
+}
+
+void Vehicle::recalculatePath(const World& world) {
+    if (hasFinishedPath) return;
+
+    sf::Vector2i current = getCurrentTile();
+    std::vector<sf::Vector2i> newPath = Pathfinder::findPath(world, current, goalTile);
+
+    if (!newPath.empty()) {
+        // --- LA CORRECTION EST ICI ---
+        // 1. On mémorise les vrais points d'origine
+        sf::Vector2i originalStart = startTile;
+        sf::Vector2i originalGoal = goalTile;
+
+        // 2. On applique le nouveau chemin (ce qui va écraser les variables)
+        setPath(newPath);
+
+        // 3. On restaure les origines pour la sauvegarde et le reset !
+        startTile = originalStart;
+        goalTile = originalGoal;
+    } else {
+        // La route est coupée, on s'arrête
+        densePath.clear();
+        currentSpeed = 0.f;
+    }
+}
+
+void Vehicle::resetToStart(const World& world) {
+    // 1. Téléportation au centre de la tuile de départ originelle
+    position = sf::Vector2f(startTile.x * tileSize + tileSize / 2.f, startTile.y * tileSize + tileSize / 2.f);
+    velocity = sf::Vector2f(0.f, 0.f);
+    currentSpeed = 0.f;
+    currentAngle = 0.f;
+    isHeadingInitialized = false;
+    hasFinishedPath = false;
+    currentPathIndex = 0;
+
+    isCommittedToPass = false;
+    committedIntersectionId = -1;
+
+    // --- LA CORRECTION EST ICI ---
+    // 2. On recalcule un chemin complet depuis le VRAI départ jusqu'à la VRAIE arrivée
+    std::vector<sf::Vector2i> fullPath = Pathfinder::findPath(world, startTile, goalTile);
+
+    if (!fullPath.empty()) {
+        setPath(fullPath); // Ici setPath assignera naturellement les bons start/goal
+    } else {
+        densePath.clear(); // S'il n'y a plus de route au reset, il reste sur place
+    }
 }

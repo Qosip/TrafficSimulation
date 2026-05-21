@@ -33,6 +33,10 @@ protected:
     // Tracking intersection
     bool isCommittedToPass = false;
     int committedIntersectionId = -1;
+
+    // Sauvegarde du scénario originel
+    sf::Vector2i startTile;
+    sf::Vector2i goalTile;
 public:
     Vehicle(float startX, float startY, float tSize = 50.f);
     virtual ~Vehicle() = default;
@@ -54,4 +58,12 @@ public:
     float getHeading() const override;
     float getSpeed() const override;
     float getLength() const override;
+
+    sf::Vector2i getStartTile() const override { return startTile; }
+    sf::Vector2i getGoalTile() const override { return goalTile; }
+
+    // Mode Construction
+    sf::Vector2i getCurrentTile() const override;
+    void recalculatePath(const World& world) override;
+    void resetToStart(const World& world) override;
 };

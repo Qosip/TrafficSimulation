@@ -25,8 +25,8 @@ target_link_libraries(TrafficSimulation PRIVATE
 )
 
 if(EXISTS ${CMAKE_SOURCE_DIR}/assets)
-    add_custom_command(TARGET MultiAgentSim POST_BUILD
+    add_custom_command(TARGET TrafficSimulation POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:MultiAgentSim>/assets
+            ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:TrafficSimulation>/assets
     )
 endif()

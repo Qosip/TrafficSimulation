@@ -43,7 +43,7 @@ public:
                 return reconstructPath(cameFrom, current);
             }
 
-            // --- NOUVEAU : Déterminer la direction actuelle du véhicule ---
+            // --- Déterminer la direction actuelle du véhicule ---
             sf::Vector2i currentDir(0, 0);
             if (cameFrom.find(current) != cameFrom.end()) {
                 currentDir = current - cameFrom[current];
@@ -52,7 +52,7 @@ public:
             for (const auto& neighbor : world.getValidNeighbors(current.x, current.y)) {
                 sf::Vector2i moveDir = neighbor - current;
 
-                // --- NOUVEAU : Calcul du coût avec pénalité de virage ---
+                // --- Calcul du coût avec pénalité de virage ---
                 float moveCost = 1.0f;
 
                 // Si on bougeait déjà (currentDir != 0,0) et qu'on change de direction
