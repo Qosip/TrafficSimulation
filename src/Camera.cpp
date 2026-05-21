@@ -9,8 +9,22 @@ Camera::Camera(float centerX, float centerY, float viewWidth, float viewHeight)
     view.setCenter(centerX, centerY);
 }
 
+void Camera::updateViewport(float windowWidth, float windowHeight, float panelWidth) {
+    // 1. On calcule la vraie largeur disponible pour le jeu (Écran total - Panneau ImGui)
+    float gameWidth = windowWidth - panelWidth;
+    if (gameWidth <= 0) gameWidth = 1.f; // Sécurité anti-crash
+
+    // 2. On met à jour les dimensions de base pour conserver le ratio parfait
+    baseWidth = gameWidth;
+    baseHeight = windowHeight;
+    view.setSize(baseWidth * zoomLevel, baseHeight * zoomLevel);
+
+    // 3. On contraint le dessin sur la partie gauche de la fenêtre via un Viewport (en pourcentages)
+    float viewportWidthPercent = gameWidth / windowWidth;
+    view.setViewport(sf::FloatRect(0.f, 0.f, viewportWidthPercent, 1.f));
+}
+
 void Camera::handleEvent(const sf::Event& event, const sf::RenderWindow& window) {
-    // --- Zoom molette ---
     if (event.type == sf::Event::MouseWheelScrolled) {
         if (event.mouseWheelScroll.delta > 0) {
             zoomLevel /= zoomStep;
@@ -22,7 +36,6 @@ void Camera::handleEvent(const sf::Event& event, const sf::RenderWindow& window)
         view.setSize(baseWidth * zoomLevel, baseHeight * zoomLevel);
     }
 
-    // --- Drag souris (clic droit maintenu) ---
     if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Right) {
         isDragging = true;
         lastMousePos = sf::Mouse::getPosition(window);
@@ -34,7 +47,6 @@ void Camera::handleEvent(const sf::Event& event, const sf::RenderWindow& window)
         sf::Vector2i currentMousePos = sf::Mouse::getPosition(window);
         sf::Vector2i delta = lastMousePos - currentMousePos;
 
-        // Convertir le delta pixel en delta monde (proportionnel au zoom)
         float scaleX = view.getSize().x / (float)window.getSize().x;
         float scaleY = view.getSize().y / (float)window.getSize().y;
 

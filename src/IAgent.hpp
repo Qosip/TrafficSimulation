@@ -3,40 +3,40 @@
 #include <SFML/Graphics.hpp>
 #include <vector>
 #include <memory>
+#include <string>
 
-// Forward declarations
 class World;
 
 class IAgent {
 public:
     virtual ~IAgent() = default;
 
-    // dt + accès aux autres agents et au monde pour la perception
+    // Mise à jour de la logique et de la perception
     virtual void update(float dt,
                         const std::vector<std::unique_ptr<IAgent>>& agents,
                         const World& world) = 0;
 
+    // Rendu graphique standard
     virtual void draw(sf::RenderWindow& window) = 0;
 
+    // Getters physiques fondamentaux
     virtual sf::Vector2f getPosition() const = 0;
-
-    // Pour que le système de vision puisse identifier ce qu'il détecte
     virtual float getHeading() const = 0;   // Angle en degrés
-    virtual float getSpeed() const = 0;     // Vitesse actuelle
+    virtual float getSpeed() const = 0;     // Vitesse actuelle en px/s
+    virtual float getLength() const = 0;    // Longueur totale de la carrosserie
 
-    // Debug
-    virtual bool contains(sf::Vector2f point) const = 0;
-    virtual void setSelected(bool selected) = 0;
-    virtual void drawDebug(sf::RenderWindow& window) = 0;
-    virtual float getLength() const = 0;
-
-    // Sauvegarde
+    // Gestion du scénario originel et du Mode Construction
     virtual std::string getType() const = 0;
     virtual sf::Vector2i getStartTile() const = 0;
     virtual sf::Vector2i getGoalTile() const = 0;
-
-    // Mode Construction
     virtual sf::Vector2i getCurrentTile() const = 0;
     virtual void recalculatePath(const World& world) = 0;
     virtual void resetToStart(const World& world) = 0;
+
+    // Outils de Débogage et d'Inspection UI
+    virtual bool contains(sf::Vector2f point) const = 0;
+    virtual void setSelected(bool selected) = 0;
+    virtual bool isSelected() const = 0;
+    virtual void drawDebug(sf::RenderWindow& window) = 0;
+    virtual float getRemainingDistance() const = 0;
 };

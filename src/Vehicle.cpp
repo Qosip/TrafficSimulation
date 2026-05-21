@@ -19,11 +19,9 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
     densePath.clear();
     if (newPath.empty()) return;
 
-    // On mémorise la première et la dernière tuile du chemin donné
     startTile = newPath.front();
     goalTile = newPath.back();
 
-    // Convertir les coordonnées de la grille en positions réelles (pixels) au centre des tuiles
     std::vector<sf::Vector2f> waypoints;
     for (const auto& tile : newPath) {
         waypoints.push_back(sf::Vector2f(
@@ -34,16 +32,13 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
 
     if (waypoints.size() < 2) return;
 
-    // Rayon de braquage de l'arc de cercle (ici, la taille d'une tuile, soit 50 pixels)
     float cornerRadius = tileSize;
-
     densePath.push_back(waypoints.front());
 
     for (size_t i = 0; i < waypoints.size() - 1; ++i) {
         sf::Vector2f p1 = waypoints[i];
         sf::Vector2f p2 = waypoints[i+1];
 
-        // S'il y a un troisième point, on vérifie si ça forme un virage à 90°
         if (i + 2 < waypoints.size()) {
             sf::Vector2f p3 = waypoints[i+2];
 
@@ -57,16 +52,11 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
                 dir1 /= len1;
                 dir2 /= len2;
 
-                // Produit scalaire pour vérifier si les deux segments sont perpendiculaires (virage à 90°)
                 float dot = (dir1.x * dir2.x) + (dir1.y * dir2.y);
                 if (std::abs(dot) < 0.1f) {
-
-                    // --- CALCUL DE L'ARC DE CERCLE PARFAIT ---
-                    // On recule le point d'entrée du virage et on avance le point de sortie
                     sf::Vector2f entryPoint = p2 - dir1 * cornerRadius;
                     sf::Vector2f exitPoint = p2 + dir2 * cornerRadius;
 
-                    // Génération de la ligne droite jusqu'à l'entrée du virage
                     sf::Vector2f toEntry = entryPoint - densePath.back();
                     float distToEntry = std::sqrt(toEntry.x * toEntry.x + toEntry.y * toEntry.y);
                     if (distToEntry > 4.f) {
@@ -76,24 +66,19 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
                         }
                     }
 
-                    // Calcul du centre mathématique du cercle de braquage
                     sf::Vector2f circleCenter = entryPoint + sf::Vector2f(-dir1.y, dir1.x) * cornerRadius;
-                    // Sécurité : on vérifie si le centre est du bon côté, sinon on inverse
                     sf::Vector2f testRadius = exitPoint - circleCenter;
                     if (std::abs(std::sqrt(testRadius.x * testRadius.x + testRadius.y * testRadius.y) - cornerRadius) > 1.f) {
                         circleCenter = entryPoint + sf::Vector2f(dir1.y, -dir1.x) * cornerRadius;
                     }
 
-                    // Calcul des angles de départ et d'arrivée sur le cercle
                     float startAngle = std::atan2(entryPoint.y - circleCenter.y, entryPoint.x - circleCenter.x);
                     float endAngle = std::atan2(exitPoint.y - circleCenter.y, exitPoint.x - circleCenter.x);
 
-                    // Gestion de la continuité des angles pour interpoler dans le bon sens
                     float angleDiff = endAngle - startAngle;
                     while (angleDiff < -3.14159265f) angleDiff += 2.f * 3.14159265f;
                     while (angleDiff > 3.14159265f) angleDiff -= 2.f * 3.14159265f;
 
-                    // On échantillonne l'arc de cercle en 15 micro-points pour une courbe ultra-lisse
                     int numSegments = 15;
                     for (int j = 1; j <= numSegments; ++j) {
                         float t = (float)j / numSegments;
@@ -104,13 +89,12 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
                         ));
                     }
 
-                    i++; // On saute le point du coin (p2) puisqu'on l'a contourné par un arc de cercle
+                    i++;
                     continue;
                 }
             }
         }
 
-        // Génération standard en ligne droite si ce n'est pas un virage
         sf::Vector2f diff = p2 - densePath.back();
         float dist = std::sqrt(diff.x * diff.x + diff.y * diff.y);
         if (dist > 4.f) {
@@ -121,20 +105,15 @@ void Vehicle::setPath(const std::vector<sf::Vector2i>& newPath) {
         }
     }
 
-    // Ajout du point final exact pour terminer proprement la route
     densePath.push_back(waypoints.back());
-
     currentPathIndex = 0;
     hasFinishedPath = false;
     isHeadingInitialized = false;
 }
 
-void Vehicle::update(float dt,
-                     const std::vector<std::unique_ptr<IAgent>>& agents,
-                     const World& world) {
+void Vehicle::update(float dt, const std::vector<std::unique_ptr<IAgent>>& agents, const World& world) {
     if (densePath.empty() || hasFinishedPath) return;
 
-    // --- 1. ANCRAGE SUR LA ROUTE ---
     size_t closestIdx = currentPathIndex;
     float minDist = 999999.f;
     size_t searchWindow = std::min(currentPathIndex + 30, densePath.size());
@@ -149,7 +128,6 @@ void Vehicle::update(float dt,
     }
     currentPathIndex = closestIdx;
 
-    // --- PERCEPTION ---
     lastPerception = Perception::scan(position, currentAngle, this, agents, world, visionParams);
 
     if (currentPathIndex >= densePath.size() - 2) {
@@ -159,8 +137,6 @@ void Vehicle::update(float dt,
         return;
     }
 
-    // --- 2. GESTION DU VOLANT (Look-Ahead ultra-court pour coller à la ligne) ---
-    // On regarde seulement 3 points devant (~12 pixels) au lieu de 10
     size_t steeringLookAheadIdx = std::min(currentPathIndex + 3, densePath.size() - 1);
     sf::Vector2f targetDir = densePath[steeringLookAheadIdx] - position;
     float targetAngleRad = std::atan2(targetDir.y, targetDir.x);
@@ -175,34 +151,24 @@ void Vehicle::update(float dt,
     while (angleDiff < -180.f) angleDiff += 360.f;
     while (angleDiff > 180.f) angleDiff -= 360.f;
 
-    // Direction beaucoup plus réactive pour suivre la courbe instantanément
     float maxTurnSpeed = 300.f;
     float steering = angleDiff * 15.0f;
     steering = std::clamp(steering, -maxTurnSpeed, maxTurnSpeed);
     currentAngle += steering * dt;
 
-    // --- 3. LES 3 PHASES DE CONDUITE (Le Cerveau) ---
     float roadLimit = world.getSpeedLimitAt(position.x, position.y);
     float targetSpeed;
     if (isCommittedToPass) {
-        // Dans l'intersection → on utilise la limite de la route autour, pas celle de la tuile intersection
-        // On cherche la limite de la route d'avant (la dernière limite non-intersection)
         targetSpeed = std::min(maxSpeed, lastRoadSpeedLimit);
     } else {
         targetSpeed = (roadLimit > 0.f) ? std::min(maxSpeed, roadLimit) : maxSpeed;
-        // Sauvegarder la dernière limite de route (pas intersection) pour la traversée
-        if (roadLimit > 0.f) {
-            lastRoadSpeedLimit = roadLimit;
-        }
+        if (roadLimit > 0.f) lastRoadSpeedLimit = roadLimit;
     }
     float corneringSpeed = maxSpeed * 0.35f;
 
-    // A. Phase de Virage : Si le volant est tourné, vitesse basse
     if (std::abs(angleDiff) > 4.f) {
         targetSpeed = corneringSpeed;
-    }
-    // B. Phase d'Anticipation (Freinage doux en ligne droite)
-    else {
+    } else {
         size_t farIdx = std::min(currentPathIndex + 20, densePath.size() - 1);
         size_t farNextIdx = std::min(farIdx + 2, densePath.size() - 1);
 
@@ -217,44 +183,33 @@ void Vehicle::update(float dt,
             futureRoadDir /= lenF;
 
             float dot = (currentRoadDir.x * futureRoadDir.x) + (currentRoadDir.y * futureRoadDir.y);
-            if (dot < 0.98f) {
-                targetSpeed = corneringSpeed;
-            }
+            if (dot < 0.98f) targetSpeed = corneringSpeed;
         }
     }
 
-    // C. Phase de Perception : réaction aux obstacles détectés
+    // --- FIX 1 : HITBOX ET ESPACEMENT DYNAMIQUE ---
     if (lastPerception.hasDirectObstacle) {
-
         float gap = lastPerception.directObstacleDistance;
-        float desiredGap = 20.f; // L'espace constant exact souhaité
+
+        // La marge de sécurité est maintenant intelligente !
+        // Moitié de MA taille + Marge de sécurité (15px) + Distance d'arrêt proportionnelle à ma vitesse (règle des 2 secondes)
+        float desiredGap = (getLength() / 2.f) + 15.f + (currentSpeed * 0.8f);
 
         if (gap <= desiredGap) {
             targetSpeed = 0.f;
-
-            // Freinage d'urgence si on a mordu sur le gap (ex: l'agent devant a pilé)
             if (currentSpeed > 0.f) {
+                // Freinage d'urgence puissant (évite les frottements)
                 currentSpeed = std::max(0.f, currentSpeed - (maxAcceleration * 5.f) * dt);
             }
         } else {
-            // --- Calcul cinématique parfait ---
-            // On calcule sur une décélération de prévision de 1.5x
-            // Sachant que nos freins effectifs peuvent aller jusqu'à 1.8x,
-            // cela nous donne une marge de sécurité pour lisser la courbe d'arrêt.
             float safeDeceleration = maxAcceleration * 1.5f;
             float availableDist = gap - desiredGap;
-
-            // Vitesse = racine_carrée(2 * a * d)
-            float safeSpeed = std::sqrt(2.f * safeDeceleration * availableDist);
-
-            if (safeSpeed < targetSpeed) {
-                targetSpeed = safeSpeed;
-            }
+            float safeSpeed = std::sqrt(2.f * safeDeceleration * std::max(0.1f, availableDist));
+            if (safeSpeed < targetSpeed) targetSpeed = safeSpeed;
         }
     }
-    // D. Phase Intersection : respecter la régulation
-    const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
 
+    const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
     if (interOn) {
         isCommittedToPass = true;
         committedIntersectionId = interOn->getId();
@@ -264,7 +219,7 @@ void Vehicle::update(float dt,
     }
 
     if (interOn && isCommittedToPass) {
-        // Pas de freinage, on traverse
+        // Déjà dans le carrefour, on avance !
     } else if (!interOn) {
         float headRad = currentAngle * 3.14159265f / 180.f;
         sf::Vector2f lookDir(std::cos(headRad), std::sin(headRad));
@@ -284,13 +239,57 @@ void Vehicle::update(float dt,
 
         if (interAhead) {
             if (isCommittedToPass && committedIntersectionId == interAhead->getId()) {
-                // Déjà engagé → on fonce
+                // Fonce
             } else {
                 Approach::Direction myDir = world.getApproachDirection(currentAngle);
                 bool allowed = interAhead->canPass(myDir, agents);
-
-                // Distance nécessaire pour freiner à cette vitesse
                 float brakingDistance = (currentSpeed * currentSpeed) / (2.f * maxAcceleration * 1.8f);
+
+                // --- FIX 2 : IA TIME-TO-COLLISION POUR PRIORITÉ À DROITE ---
+                if (allowed && interAhead->getType() == RegulationType::PRIORITY_RIGHT) {
+                    // Calcul du temps qu'il NOUS faut pour traverser (Distance + Taille Carrefour + Notre Longueur)
+                    float myTTC = (distToInter + 80.f + getLength()) / std::max(10.f, currentSpeed);
+
+                    // Création des vecteurs Avant et Droite pour repérer géométriquement les menaces
+                    float radForward = currentAngle * 3.14159265f / 180.f;
+                    float radRight = (currentAngle + 90.f) * 3.14159265f / 180.f;
+                    sf::Vector2f forwardVec(std::cos(radForward), std::sin(radForward));
+                    sf::Vector2f rightVec(std::cos(radRight), std::sin(radRight));
+
+                    // Quel est l'angle de base des véhicules venant de droite ?
+                    float threatHeading = currentAngle - 90.f;
+                    while (threatHeading < -180.f) threatHeading += 360.f;
+                    while (threatHeading > 180.f) threatHeading -= 360.f;
+
+                    for (const auto& other : agents) {
+                        if (other.get() == this) continue;
+
+                        float diff = other->getHeading() - threatHeading;
+                        while (diff < -180.f) diff += 360.f;
+                        while (diff > 180.f) diff -= 360.f;
+
+                        // Si l'autre véhicule regarde dans la direction de la menace (+/- 45 degrés)
+                        if (std::abs(diff) < 45.f) {
+                            sf::Vector2f toOther = other->getPosition() - position;
+                            float dotForward = toOther.x * forwardVec.x + toOther.y * forwardVec.y;
+                            float dotRight = toOther.x * rightVec.x + toOther.y * rightVec.y;
+
+                            // S'il est physiquement devant nous et sur notre droite (dans un rayon de 150px)
+                            if (dotForward > -20.f && dotForward < 150.f && dotRight > 0.f && dotRight < 150.f) {
+
+                                // On calcule dans combien de temps il percutera notre axe central
+                                float otherTTC = dotRight / std::max(10.f, other->getSpeed());
+
+                                // Si son temps de collision arrive AVANT qu'on ait fini de traverser (avec marge de sécurité)
+                                if (otherTTC < myTTC + 1.2f) {
+                                    allowed = false; // Danger ! On cède le passage !
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                // -----------------------------------------------------------
 
                 if (allowed) {
                     if (distToInter < 60.f) {
@@ -298,25 +297,20 @@ void Vehicle::update(float dt,
                         committedIntersectionId = interAhead->getId();
                     }
                 } else if (distToInter > brakingDistance) {
-                    // On peut encore s'arrêter → on freine
                     isCommittedToPass = false;
                     committedIntersectionId = -1;
 
                     if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
-                        // Distance d'arrêt adaptée à la taille du véhicule
-                        float vehicleHalfLength = shape.getSize().x / 2.f;
-                        float stopDist = 30.f + vehicleHalfLength;
+                        float stopDist = 25.f + (getLength() / 2.f); // Arrêt parfait au trait
                         if (distToInter <= stopDist) {
                             targetSpeed = 0.f;
-                            if (currentSpeed > 10.f) {
-                                currentSpeed = std::max(0.f, currentSpeed - (maxAcceleration * 5.f) * dt);
-                            }
+                            if (currentSpeed > 5.f) currentSpeed = std::max(0.f, currentSpeed - (maxAcceleration * 5.f) * dt);
                         } else if (distToInter < stopDist + 80.f) {
                             float factor = (distToInter - stopDist) / 80.f;
                             targetSpeed = std::min(targetSpeed, targetSpeed * factor);
                         }
                     } else if (interAhead->getType() == RegulationType::PRIORITY_RIGHT) {
-                        float stopDist = 35.f;
+                        float stopDist = 25.f + (getLength() / 2.f); // Arrêt parfait au trait
                         float brakeDist = 120.f;
 
                         if (distToInter <= stopDist) {
@@ -324,13 +318,11 @@ void Vehicle::update(float dt,
                         } else if (distToInter < brakeDist) {
                             float factor = (distToInter - stopDist) / (brakeDist - stopDist);
                             float interSpeed = corneringSpeed + (targetSpeed - corneringSpeed) * factor;
-                            if (interSpeed < targetSpeed) {
-                                targetSpeed = interSpeed;
-                            }
+                            if (interSpeed < targetSpeed) targetSpeed = interSpeed;
                         }
                     }
                 } else {
-                    // Trop proche pour freiner → on s'engage et on passe
+                    // Si on n'a plus le temps de freiner en sécurité, on force le passage
                     isCommittedToPass = true;
                     committedIntersectionId = interAhead->getId();
                 }
@@ -341,18 +333,14 @@ void Vehicle::update(float dt,
         }
     }
 
-    // --- 4. ACCÉLÉRATEUR ET FREINS ---
     if (currentSpeed < targetSpeed) {
-        // Accélération normale
         currentSpeed += maxAcceleration * dt;
         if (currentSpeed > targetSpeed) currentSpeed = targetSpeed;
     } else if (currentSpeed > targetSpeed) {
-        // Freinage de confort : 1.8x le moteur au lieu de 5.0x
         currentSpeed -= (maxAcceleration * 1.8f) * dt;
         if (currentSpeed < targetSpeed) currentSpeed = targetSpeed;
     }
 
-    // --- 5. APPLICATION DU MOUVEMENT ---
     float rad = currentAngle * 3.14159265f / 180.f;
     velocity.x = std::cos(rad) * currentSpeed;
     velocity.y = std::sin(rad) * currentSpeed;
@@ -361,58 +349,29 @@ void Vehicle::update(float dt,
     shape.setPosition(position);
     shape.setRotation(currentAngle);
 }
+
 void Vehicle::draw(sf::RenderWindow& window) {
     window.draw(shape);
 }
 
-sf::Vector2f Vehicle::getPosition() const {
-    return position;
-}
-
-bool Vehicle::isFinished() const {
-    return hasFinishedPath;
-}
-
-// --- MODE DEBUG ---
-
 bool Vehicle::contains(sf::Vector2f point) const {
-    // getGlobalBounds() crée un rectangle autour de la voiture et check si la souris est dedans
     return shape.getGlobalBounds().contains(point);
 }
 
-void Vehicle::setSelected(bool selected) {
-    isSelected = selected;
-}
-
 void Vehicle::drawDebug(sf::RenderWindow& window) {
-    if (!isSelected || densePath.empty() || hasFinishedPath) return;
+    if (!isSelectedFlag || densePath.empty() || hasFinishedPath) return;
 
-    // Dessin du cône de vision
     Perception::drawDebugCone(window, position, currentAngle, visionParams, lastPerception);
 
-    // Dessin du chemin restant
     sf::VertexArray pathLine(sf::LineStrip, densePath.size() - currentPathIndex);
     for (size_t i = currentPathIndex; i < densePath.size(); ++i) {
         pathLine[i - currentPathIndex].position = densePath[i];
-        pathLine[i - currentPathIndex].color = sf::Color::Magenta;
+        pathLine[i - currentPathIndex].color = sf::Color(147, 112, 219, 220);
     }
     window.draw(pathLine);
 }
 
-float Vehicle::getHeading() const {
-    return currentAngle;
-}
-
-float Vehicle::getSpeed() const {
-    return currentSpeed;
-}
-
-float Vehicle::getLength() const {
-    return shape.getSize().x;
-}
-
 sf::Vector2i Vehicle::getCurrentTile() const {
-    // Convertit la position pixel en coordonnées de la grille
     return sf::Vector2i((int)(position.x / tileSize), (int)(position.y / tileSize));
 }
 
@@ -423,27 +382,28 @@ void Vehicle::recalculatePath(const World& world) {
     std::vector<sf::Vector2i> newPath = Pathfinder::findPath(world, current, goalTile);
 
     if (!newPath.empty()) {
-        // --- LA CORRECTION EST ICI ---
-        // 1. On mémorise les vrais points d'origine
         sf::Vector2i originalStart = startTile;
         sf::Vector2i originalGoal = goalTile;
-
-        // 2. On applique le nouveau chemin (ce qui va écraser les variables)
         setPath(newPath);
-
-        // 3. On restaure les origines pour la sauvegarde et le reset !
         startTile = originalStart;
         goalTile = originalGoal;
     } else {
-        // La route est coupée, on s'arrête
         densePath.clear();
         currentSpeed = 0.f;
     }
 }
 
 void Vehicle::resetToStart(const World& world) {
-    // 1. Téléportation au centre de la tuile de départ originelle
+    // 1. Téléportation mathématique
     position = sf::Vector2f(startTile.x * tileSize + tileSize / 2.f, startTile.y * tileSize + tileSize / 2.f);
+
+    // --- LE FIX VISUEL ---
+    // On force la mise à jour graphique instantanément pour tuer le "fantôme"
+    // qui restait bloqué au milieu de la route détruite.
+    shape.setPosition(position);
+    shape.setRotation(0.f);
+    // -----------------------------
+
     velocity = sf::Vector2f(0.f, 0.f);
     currentSpeed = 0.f;
     currentAngle = 0.f;
@@ -454,13 +414,38 @@ void Vehicle::resetToStart(const World& world) {
     isCommittedToPass = false;
     committedIntersectionId = -1;
 
-    // --- LA CORRECTION EST ICI ---
-    // 2. On recalcule un chemin complet depuis le VRAI départ jusqu'à la VRAIE arrivée
+    // 2. On tente de recalculer la route vers l'objectif
     std::vector<sf::Vector2i> fullPath = Pathfinder::findPath(world, startTile, goalTile);
 
     if (!fullPath.empty()) {
-        setPath(fullPath); // Ici setPath assignera naturellement les bons start/goal
+        // --- LE FIX DE SÉCURITÉ ---
+        // On protège le startTile pour qu'il ne soit pas écrasé
+        sf::Vector2i originalStart = startTile;
+        sf::Vector2i originalGoal = goalTile;
+
+        setPath(fullPath);
+
+        startTile = originalStart;
+        goalTile = originalGoal;
     } else {
-        densePath.clear(); // S'il n'y a plus de route au reset, il reste sur place
+        // La route est coupée, on le laisse à sa place de spawn (déjà set plus haut)
+        densePath.clear();
     }
+}
+
+float Vehicle::getRemainingDistance() const {
+    if (densePath.empty() || hasFinishedPath) return 0.f;
+
+    float distance = 0.f;
+    sf::Vector2f prevPos = position;
+
+    for(size_t i = currentPathIndex; i < densePath.size(); ++i) {
+        sf::Vector2f currentPos = densePath[i];
+        float dx = currentPos.x - prevPos.x;
+        float dy = currentPos.y - prevPos.y;
+        distance += std::sqrt(dx * dx + dy * dy);
+        prevPos = currentPos;
+    }
+
+    return distance;
 }
