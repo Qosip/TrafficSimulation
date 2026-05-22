@@ -2,7 +2,9 @@
 #pragma once
 #include "IAgent.hpp"
 #include "Perception.hpp"
+#include "Lane.hpp" // NOUVEAU
 #include <vector>
+#include <memory>
 
 class Vehicle : public IAgent {
 protected:
@@ -13,8 +15,9 @@ protected:
     float maxAcceleration;
     sf::RectangleShape shape;
 
-    std::vector<sf::Vector2f> densePath;
-    size_t currentPathIndex;
+    std::shared_ptr<Lane> currentLane;
+    float s;
+
     bool hasFinishedPath;
     float tileSize;
 
@@ -22,19 +25,14 @@ protected:
     float currentSpeed;
     bool isHeadingInitialized;
 
-    // Statut d'interface
     bool isSelectedFlag = false;
-
-    // Périmètre de vision et capteurs
     VisionParams visionParams;
     PerceptionResult lastPerception;
     float lastRoadSpeedLimit = 100.f;
 
-    // Verrous de priorité aux carrefours
     bool isCommittedToPass = false;
     int committedIntersectionId = -1;
 
-    // Coordonnées cibles du scénario immuable
     sf::Vector2i startTile;
     sf::Vector2i goalTile;
 
