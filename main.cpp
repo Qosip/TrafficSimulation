@@ -6,53 +6,22 @@
 #include <vector>
 #include <memory>
 #include <iostream>
-#include <sstream>
-#include <fstream>
 #include <string>
 
 #include "portable-file-dialogs.h"
-#include "Car.hpp"
-#include "Truck.hpp"
-#include "World.hpp"
-#include "Camera.hpp"
-#include "Pathfinder.hpp"
+#include "core/agent/BlockReason.hpp"
+#include "core/agent/Car.hpp"
+#include "core/agent/Truck.hpp"
+#include "core/world/World.hpp"
+#include "render/Camera.hpp"
+#include "core/pathfinding/AStarPlanner.hpp"
+#include "io/SceneBuilder.hpp"
+#include "io/ScenarioIO.hpp"
+#include "render/SfmlRenderer.hpp"
+#include "render/SfmlInterop.hpp"
 
 enum class AppState { MAIN_MENU, SIMULATION };
 enum class BuildTool { ROAD_CITY_50, ROAD_HIGHWAY_130, INTERSECTION_PRIORITY, INTERSECTION_TRAFFIC_LIGHT, ERASE };
-
-void buildCrossroad(World& w, int cx, int cy, int id, RegulationType regType) {
-    w.setTile(cx - 1, cy - 1, RoadType::INTERSECTION, TileDirection::NONE);
-    w.setTile(cx,     cy - 1, RoadType::INTERSECTION, TileDirection::NONE);
-    w.setTile(cx - 1, cy,     RoadType::INTERSECTION, TileDirection::NONE);
-    w.setTile(cx,     cy,     RoadType::INTERSECTION, TileDirection::NONE);
-
-    Intersection inter(id, regType);
-    inter.addCoveredTile(sf::Vector2i(cx - 1, cy - 1));
-    inter.addCoveredTile(sf::Vector2i(cx,     cy - 1));
-    inter.addCoveredTile(sf::Vector2i(cx - 1, cy));
-    inter.addCoveredTile(sf::Vector2i(cx,     cy));
-
-    Approach north; north.direction = Approach::Direction::NORTH; north.entryTile = sf::Vector2i(cx, cy - 2); inter.addApproach(north);
-    Approach south; south.direction = Approach::Direction::SOUTH; south.entryTile = sf::Vector2i(cx - 1, cy + 1); inter.addApproach(south);
-    Approach east;  east.direction = Approach::Direction::EAST;   east.entryTile = sf::Vector2i(cx + 1, cy - 1);  inter.addApproach(east);
-    Approach west;  west.direction = Approach::Direction::WEST;   west.entryTile = sf::Vector2i(cx - 2, cy);      inter.addApproach(west);
-
-    w.addIntersection(inter);
-}
-
-void buildHRoad(World& world, int y, int xStart, int xEnd) {
-    for (int x = xStart; x <= xEnd; ++x) {
-        world.setTile(x, y, RoadType::CITY_50, TileDirection::RIGHT);
-        world.setTile(x, y - 1, RoadType::CITY_50, TileDirection::LEFT);
-    }
-}
-
-void buildVRoad(World& world, int x, int yStart, int yEnd) {
-    for (int y = yStart; y <= yEnd; ++y) {
-        world.setTile(x, y, RoadType::CITY_50, TileDirection::UP);
-        world.setTile(x - 1, y, RoadType::CITY_50, TileDirection::DOWN);
-    }
-}
 
 std::string openFileDialog() {
     if (!pfd::settings::available()) return "";
@@ -68,63 +37,6 @@ std::string saveFileDialog() {
     return path;
 }
 
-void exportScenario(const std::string& filename, const World& world, const std::vector<std::unique_ptr<IAgent>>& agents) {
-    std::ofstream file(filename);
-    if (!file.is_open()) return;
-    file << "W " << world.getGridWidth() << " " << world.getGridHeight() << " " << world.getTileSize() << "\n";
-    for (int x = 0; x < world.getGridWidth(); ++x) {
-        for (int y = 0; y < world.getGridHeight(); ++y) {
-            const Tile& tile = world.getTile(x, y);
-            if (tile.roadType != RoadType::NONE) {
-                file << "T " << x << " " << y << " " << static_cast<int>(tile.roadType) << " " << static_cast<int>(tile.direction) << "\n";
-            }
-        }
-    }
-    for (const auto& inter : world.getIntersections()) {
-        if (!inter.getCoveredTiles().empty()) {
-            sf::Vector2i firstTile = inter.getCoveredTiles()[0];
-            file << "I " << firstTile.x + 1 << " " << firstTile.y + 1 << " " << inter.getId() << " " << static_cast<int>(inter.getType()) << "\n";
-        }
-    }
-    for (const auto& agent : agents) {
-        file << "A " << agent->getType() << " " << agent->getStartTile().x << " " << agent->getStartTile().y << " " << agent->getGoalTile().x << " " << agent->getGoalTile().y << "\n";
-    }
-    file.close();
-}
-
-bool importScenario(const std::string& filename, std::unique_ptr<World>& outWorld, std::vector<std::unique_ptr<IAgent>>& outAgents) {
-    std::ifstream file(filename);
-    if (!file.is_open()) return false;
-    outAgents.clear();
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.empty()) continue;
-        std::stringstream ss(line);
-        char entryType; ss >> entryType;
-        if (entryType == 'W') {
-            int w, h; float tSize; ss >> w >> h >> tSize;
-            outWorld = std::make_unique<World>(w, h, tSize);
-        } else if (entryType == 'T' && outWorld) {
-            int x, y, rType, dir; ss >> x >> y >> rType >> dir;
-            outWorld->setTile(x, y, static_cast<RoadType>(rType), static_cast<TileDirection>(dir));
-        } else if (entryType == 'I' && outWorld) {
-            int cx, cy, id, rType; ss >> cx >> cy >> id >> rType;
-            buildCrossroad(*outWorld, cx, cy, id, static_cast<RegulationType>(rType));
-        } else if (entryType == 'A' && outWorld) {
-            std::string type; int sx, sy, gx, gy; ss >> type >> sx >> sy >> gx >> gy;
-            float tSize = outWorld->getTileSize();
-            std::unique_ptr<Vehicle> v;
-            if (type == "CAR") v = std::make_unique<Car>(sx * tSize + tSize / 2.f, sy * tSize + tSize / 2.f);
-            else if (type == "TRUCK") v = std::make_unique<Truck>(sx * tSize + tSize / 2.f, sy * tSize + tSize / 2.f);
-            if (v) {
-                v->setPath(Pathfinder::findPath(*outWorld, {sx, sy}, {gx, gy}));
-                outAgents.push_back(std::move(v));
-            }
-        }
-    }
-    return true;
-}
-
 int main() {
     unsigned int winW = 1024;
     unsigned int winH = 800;
@@ -138,6 +50,9 @@ int main() {
 
     ImGui::SFML::Init(window);
 
+    // Etape 3 du refactor : un unique point de rendu SFML pour toute l'app.
+    render::SfmlRenderer renderer(window);
+
     AppState currentState = AppState::MAIN_MENU;
     std::unique_ptr<World> world;
     std::unique_ptr<Camera> camera;
@@ -149,6 +64,11 @@ int main() {
     // --- NOUVEAU : Horloge pour animer les flux indépendamment de la pause du jeu ---
     sf::Clock globalClock;
 
+    // Wave 5 : pas de simulation fixe. Decouple le solver IDM du framerate.
+    constexpr float FIXED_DT = 1.0f / 60.0f;  // 60 Hz logique
+    constexpr int   MAX_SUBSTEPS = 5;         // anti-spirale en cas de stall
+    float           simAccumulator = 0.f;
+
     bool buildMode = false;
     bool showFlowDebug = false; // --- NOUVEAU : Variable d'état du bouton ---
     BuildTool currentTool = BuildTool::ROAD_CITY_50;
@@ -159,39 +79,14 @@ int main() {
         world = std::make_unique<World>(GRID_W, GRID_H, TILE_SIZE);
         agents.clear();
 
-        buildHRoad(*world, 11, 0, 31);
-        buildHRoad(*world, 22, 0, 31);
-        buildVRoad(*world, 11, 0, 31);
-        buildVRoad(*world, 22, 0, 31);
-
-        buildCrossroad(*world, 11, 11, 0, RegulationType::PRIORITY_RIGHT);
-        buildCrossroad(*world, 22, 11, 1, RegulationType::TRAFFIC_LIGHT);
-        buildCrossroad(*world, 11, 22, 2, RegulationType::TRAFFIC_LIGHT);
-        buildCrossroad(*world, 22, 22, 3, RegulationType::PRIORITY_RIGHT);
+        scene::buildDefaultNetwork(*world);
 
         camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
         camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
 
-        auto addCar = [&](int sx, int sy, int gx, int gy) {
-            auto c = std::make_unique<Car>(sx * TILE_SIZE + TILE_SIZE / 2.f, sy * TILE_SIZE + TILE_SIZE / 2.f);
-            c->setPath(Pathfinder::findPath(*world, {sx, sy}, {gx, gy}));
-            agents.push_back(std::move(c));
-        };
-        auto addTruck = [&](int sx, int sy, int gx, int gy) {
-            auto t = std::make_unique<Truck>(sx * TILE_SIZE + TILE_SIZE / 2.f, sy * TILE_SIZE + TILE_SIZE / 2.f);
-            t->setPath(Pathfinder::findPath(*world, {sx, sy}, {gx, gy}));
-            agents.push_back(std::move(t));
-        };
+        scene::spawnDefaultAgents(agents, *world);
 
-        addCar(1, 11, 21, 30);
-        addTruck(30, 10, 10, 30);
-        addCar(30, 10, 1, 10);
-        addCar(11, 30, 11, 1);
-        addCar(10, 1, 10, 30);
-        addTruck(1, 22, 28, 22);
-        addCar(21, 1, 21, 30);
-
-        world->redrawMap();
+        renderer.invalidateMapCache();
         currentState = AppState::SIMULATION;
         clock.restart();
     };
@@ -249,7 +144,7 @@ int main() {
                                             if(world->getTile(gX+i,gY+j).roadType != RoadType::NONE) hasRoad = true;
                                     if (hasRoad) {
                                         RegulationType reg = (currentTool == BuildTool::INTERSECTION_PRIORITY) ? RegulationType::PRIORITY_RIGHT : RegulationType::TRAFFIC_LIGHT;
-                                        buildCrossroad(*world, gX + 1, gY + 1, world->getIntersections().size() + 1, reg);
+                                        scene::buildCrossroad(*world, gX + 1, gY + 1, world->getIntersections().size() + 1, reg);
                                         mapChanged = true;
                                     }
                                 }
@@ -259,8 +154,9 @@ int main() {
                                 mapChanged = true;
                             }
                         } else {
+                            const core::Vec2 wPosCore = render::toCore(wPos);
                             for (auto& agent : agents) {
-                                if (agent->contains(wPos)) {
+                                if (agent->contains(wPosCore)) {
                                     agent->setSelected(!agent->isSelected());
                                     break;
                                 }
@@ -273,7 +169,7 @@ int main() {
                     }
 
                     if (mapChanged) {
-                        world->redrawMap();
+                        renderer.invalidateMapCache();
                         for (auto& agent : agents) agent->recalculatePath(*world);
                     }
                 }
@@ -297,10 +193,10 @@ int main() {
             if (ImGui::Button("Nouvelle Simulation", ImVec2(-1.f, 45.f))) initNewSimulation();
             if (ImGui::Button("Charger un Scenario (TXT)", ImVec2(-1.f, 45.f))) {
                 std::string path = openFileDialog();
-                if (!path.empty() && importScenario(path, world, agents)) {
+                if (!path.empty() && io::importScenario(path, world, agents)) {
                     camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
                     camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
-                    world->redrawMap();
+                    renderer.invalidateMapCache();
                     currentState = AppState::SIMULATION;
                     clock.restart();
                 }
@@ -310,29 +206,39 @@ int main() {
             ImGui::End();
         }
         else if (currentState == AppState::SIMULATION) {
-            float dt = isPaused ? 0.f : clock.restart().asSeconds() * simSpeedFactor;
+            // Wave 5 : pas fixe + accumulateur. Garantit que IDM tourne sur un dt
+            // constant quel que soit le framerate (stabilite numerique Euler).
+            const float frameTime = isPaused ? 0.f : clock.restart().asSeconds() * simSpeedFactor;
+            if (isPaused) { clock.restart(); simAccumulator = 0.f; }
 
             if (world && !isPaused) {
-                world->updateIntersections(dt);
-                for (auto& agent : agents) agent->update(dt, agents, *world);
-            } else if (isPaused) {
-                clock.restart();
+                simAccumulator += frameTime;
+                int steps = 0;
+                while (simAccumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+                    world->updateIntersections(FIXED_DT);
+                    for (auto& agent : agents) agent->computeDecision(agents, *world);
+                    for (auto& agent : agents) agent->integrate(FIXED_DT);
+                    simAccumulator -= FIXED_DT;
+                    ++steps;
+                }
+                // Si le frame a accumule trop de retard, on jette le surplus
+                // pour eviter le scenario "spirale de la mort".
+                if (steps >= MAX_SUBSTEPS) simAccumulator = 0.f;
             }
 
             if (camera) camera->applyTo(window);
             if (world) {
-                world->draw(window);
+                renderer.drawWorldMap(*world);
 
-                // --- NOUVEAU : Appel du dessin des flux dynamiques par-dessus la route ---
                 if (showFlowDebug) {
-                    world->drawFlowDebug(window, globalClock.getElapsedTime().asSeconds());
+                    renderer.drawFlowDebug(*world, globalClock.getElapsedTime().asSeconds());
                 }
 
-                world->drawIntersections(window);
+                renderer.drawIntersections(*world);
             }
             for (auto& agent : agents) {
-                agent->draw(window);
-                agent->drawDebug(window);
+                renderer.drawAgent(*agent);
+                renderer.drawAgentDebug(*agent);
             }
 
             window.setView(sf::View(sf::FloatRect(0.f, 0.f, (float)winW, (float)winH)));
@@ -344,7 +250,7 @@ int main() {
             if (ImGui::CollapsingHeader("Fichiers & Options", ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (ImGui::Button("Sauvegarder (S)", ImVec2(-1.f, 30.f))) {
                     std::string path = saveFileDialog();
-                    if (!path.empty()) exportScenario(path, *world, agents);
+                    if (!path.empty()) io::exportScenario(path, *world, agents);
                 }
                 if (ImGui::Button("Reset Simulation (R)", ImVec2(-1.f, 30.f))) {
                     for (auto& a : agents) a->resetToStart(*world);
@@ -394,19 +300,36 @@ int main() {
                         ImGui::Text("Destination : [%d, %d]", agent->getGoalTile().x, agent->getGoalTile().y);
 
                         float remDist = agent->getRemainingDistance();
+                        const auto reason = agent->getBlockReason();
 
-                        if (agent->getCurrentTile() == agent->getGoalTile()) {
-                            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.f), "Statut : Arrive a destination");
+                        // ETA seulement quand on roule reellement.
+                        if (agent->getSpeed() > 5.f && reason == core::agent::BlockReason::NONE) {
+                            ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f),
+                                               "ETA estimer : %.1f sec",
+                                               remDist / agent->getSpeed());
                         }
-                        else if (remDist <= 0.f) {
-                            ImGui::TextColored(ImVec4(1.f, 0.2f, 0.2f, 1.f), "Statut : PERDU (Route coupee)");
+
+                        // Couleur en fonction de la severite du motif.
+                        ImVec4 color;
+                        switch (reason) {
+                            case core::agent::BlockReason::NONE:
+                                color = ImVec4(0.f, 1.f, 0.f, 1.f); break;
+                            case core::agent::BlockReason::AT_GOAL:
+                                color = ImVec4(0.5f, 0.5f, 0.5f, 1.f); break;
+                            case core::agent::BlockReason::NO_PATH:
+                                color = ImVec4(1.f, 0.2f, 0.2f, 1.f); break;
+                            case core::agent::BlockReason::INTERSECTION_RED:
+                                color = ImVec4(1.f, 0.3f, 0.3f, 1.f); break;
+                            case core::agent::BlockReason::INTERSECTION_YIELD:
+                                color = ImVec4(1.f, 0.8f, 0.f, 1.f); break;
+                            case core::agent::BlockReason::LEADER_VEHICLE:
+                                color = ImVec4(1.f, 0.5f, 0.f, 1.f); break;
+                            case core::agent::BlockReason::CORNERING:
+                                color = ImVec4(0.6f, 0.8f, 1.f, 1.f); break;
+                            case core::agent::BlockReason::INITIALIZING:
+                                color = ImVec4(0.8f, 0.8f, 0.8f, 1.f); break;
                         }
-                        else if (agent->getSpeed() > 5.f) {
-                            ImGui::TextColored(ImVec4(0.f, 1.f, 0.f, 1.f), "ETA estimer : %.1f sec", remDist / agent->getSpeed());
-                        }
-                        else {
-                            ImGui::TextColored(ImVec4(1.f, 0.5f, 0.f, 1.f), "Statut : Bloque au trafic");
-                        }
+                        ImGui::TextColored(color, "Statut : %s", core::agent::toString(reason));
 
                         if(ImGui::Button("Forcer Demi-Tour", ImVec2(-1.f, 25.f))) {
                             agent->recalculatePath(*world);

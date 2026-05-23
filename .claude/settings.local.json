@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C C:/Users/fddav/Desktop/TrafficSimulation status)",
+      "Bash(git -C C:/Users/fddav/Desktop/TrafficSimulation branch --show-current)",
+      "Bash(git *)",
+      "Bash(wsl --version)",
+      "Bash(wsl bash *)"
+    ]
+  }
+}

@@ -1,25 +1,33 @@
 cmake_minimum_required(VERSION 3.25)
-project(TrafficSimulation)
+project(TrafficSimulation CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION SFML (Adaptée pour Linux/WSL)
+# 0. OPTIONS
 # ---------------------------------------------------------
-# On force la version dynamique (fichiers .so)
+option(TRAFFIC_BUILD_TESTS "Build the GoogleTest suite" ON)
+
+# ---------------------------------------------------------
+# 1. SFML (cross-platform)
+#    Sous Linux/WSL on prend la version systeme si dispo,
+#    sinon laisse find_package se debrouiller (vcpkg, etc.).
+# ---------------------------------------------------------
 set(SFML_STATIC OFF CACHE BOOL "" FORCE)
-# On donne le chemin exact pour éviter que CMake ne se perde
-set(SFML_DIR "/usr/lib/x86_64-linux-gnu/cmake/SFML" CACHE PATH "" FORCE)
+
+if(UNIX AND NOT APPLE AND EXISTS "/usr/lib/x86_64-linux-gnu/cmake/SFML")
+    set(SFML_DIR "/usr/lib/x86_64-linux-gnu/cmake/SFML" CACHE PATH "" FORCE)
+endif()
 
 find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 
 # ---------------------------------------------------------
-# 2. DÉPENDANCES IMGUI (Versions stables verrouillées)
+# 2. DEAR IMGUI + IMGUI-SFML (FetchContent)
 # ---------------------------------------------------------
 include(FetchContent)
 
-# A. Téléchargement de Dear ImGui (Version stable v1.88)
 FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -30,49 +38,73 @@ if(NOT imgui_POPULATED)
     FetchContent_Populate(imgui)
 endif()
 
-# B. Téléchargement de ImGui-SFML (Version stable v2.5)
 FetchContent_Declare(
         imgui-sfml
         GIT_REPOSITORY https://github.com/SFML/imgui-sfml.git
         GIT_TAG v2.5
 )
-
-# C. Configuration des chemins internes pour éviter les crashs
-# On indique à ImGui-SFML où se trouve le dossier source d'ImGui
 set(IMGUI_DIR ${imgui_SOURCE_DIR} CACHE PATH "Path to ImGui headers" FORCE)
-# On interdit à ImGui-SFML de chercher SFML de son côté pour éviter les conflits
 set(IMGUI_SFML_FIND_SFML OFF CACHE BOOL "Disable internal SFML search" FORCE)
-
 FetchContent_MakeAvailable(imgui-sfml)
 
 # ---------------------------------------------------------
-# 3. COMPILATION DE L'EXÉCUTABLE
+# 3. CIBLE : simcore (bibliotheque statique)
+#    Contient toute la logique simulation + rendu actuel.
+#    Etape 0 du refactor : structure 3 cibles, code inchange.
 # ---------------------------------------------------------
-file(GLOB_RECURSE SOURCES "src/*.cpp")
+file(GLOB_RECURSE SIMCORE_SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
-add_executable(TrafficSimulation
-        main.cpp
-        ${SOURCES}
-)
-
-# ---------------------------------------------------------
-# 4. INCLUSIONS ET ÉDITION DES LIENS
-# ---------------------------------------------------------
-target_include_directories(TrafficSimulation PRIVATE src/)
-
-target_link_libraries(TrafficSimulation PRIVATE
+add_library(simcore STATIC ${SIMCORE_SOURCES})
+target_include_directories(simcore PUBLIC src/)
+target_link_libraries(simcore PUBLIC
         sfml-graphics
         sfml-window
         sfml-system
-        ImGui-SFML::ImGui-SFML
 )
 
 # ---------------------------------------------------------
-# 5. POST-BUILD : COPIE DES ASSETS
+# 4. CIBLE : simapp (executable principal)
 # ---------------------------------------------------------
+add_executable(TrafficSimulation main.cpp)
+target_link_libraries(TrafficSimulation PRIVATE
+        simcore
+        ImGui-SFML::ImGui-SFML
+)
+
+# Post-build : assets
 if(EXISTS ${CMAKE_SOURCE_DIR}/assets)
     add_custom_command(TARGET TrafficSimulation POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:TrafficSimulation>/assets
     )
+endif()
+
+# ---------------------------------------------------------
+# 5. CIBLE : simtests (GoogleTest, optionnelle)
+# ---------------------------------------------------------
+if(TRAFFIC_BUILD_TESTS)
+    FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_TAG v1.14.0
+    )
+    # Empeche conflit avec runtime MSVC / partage des CRT
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    enable_testing()
+    include(GoogleTest)
+
+    file(GLOB SIMTEST_SOURCES "tests/test_*.cpp")
+    if(SIMTEST_SOURCES)
+        add_executable(simtests ${SIMTEST_SOURCES})
+        target_link_libraries(simtests PRIVATE
+                simcore
+                GTest::gtest_main
+        )
+        target_compile_definitions(simtests PRIVATE
+                BASELINE_PATH="${CMAKE_SOURCE_DIR}/tests/baseline.csv"
+        )
+        gtest_discover_tests(simtests)
+    endif()
 endif()
