@@ -11,6 +11,8 @@
 // utiliser librement dans leur .cpp.
 #pragma once
 
+#include "core/Color.hpp"
+
 class World;
 class IAgent;
 
@@ -35,6 +37,16 @@ public:
 
     // Surcouche de debug (cone de vision, trajectoire, detections).
     virtual void drawAgentDebug(const IAgent& agent) = 0;
+
+    // --- Surcouche du mode construction (optionnelle) ---
+    // Emprise translucide de ce qui sera pose sous le curseur (1x1 route,
+    // 2x2 carrefour, NxN rond-point). Defaut : no-op (rendu headless).
+    virtual void drawBuildFootprint(int /*gridX*/, int /*gridY*/,
+                                    int /*wTiles*/, int /*hTiles*/,
+                                    float /*tileSize*/, core::Color /*fill*/) {}
+    // Surbrillance de la tile survolee.
+    virtual void drawHoverHighlight(int /*gridX*/, int /*gridY*/,
+                                    float /*tileSize*/) {}
 };
 
 } // namespace render

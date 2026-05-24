@@ -33,11 +33,37 @@ World::World(int tilesX, int tilesY, float tSize) :
 }
 
 void World::setTile(int gridX, int gridY, RoadType type, TileDirection dir) {
-    if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
-        grid[gridX][gridY].roadType  = type;
-        grid[gridX][gridY].direction = dir;
-        mapDirty = true;
+    if (gridX < 0 || gridX >= gridWidth || gridY < 0 || gridY >= gridHeight) return;
+
+    // Suppression d'une tile : si elle appartient a une intersection,
+    // on detruit l'intersection entiere (et remet ses autres tiles a NONE)
+    // pour ne pas laisser une structure carrefour orpheline et incoherente.
+    if (type == RoadType::NONE) {
+        for (auto it = intersections.begin(); it != intersections.end(); ) {
+            bool owns = false;
+            for (const auto& t : it->getCoveredTiles()) {
+                if (t.x == gridX && t.y == gridY) { owns = true; break; }
+            }
+            if (owns) {
+                // Reset des autres tiles couvertes a NONE en bypass-record
+                // pour eviter une recursion infinie.
+                for (const auto& t : it->getCoveredTiles()) {
+                    if (t.x == gridX && t.y == gridY) continue;
+                    if (t.x >= 0 && t.x < gridWidth && t.y >= 0 && t.y < gridHeight) {
+                        grid[t.x][t.y].roadType  = RoadType::NONE;
+                        grid[t.x][t.y].direction = TileDirection::NONE;
+                    }
+                }
+                it = intersections.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
+
+    grid[gridX][gridY].roadType  = type;
+    grid[gridX][gridY].direction = dir;
+    mapDirty = true;
 }
 
 const Tile& World::getTile(int gridX, int gridY) const {

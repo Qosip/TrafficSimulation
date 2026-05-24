@@ -1,8 +1,12 @@
 // src/core/intersection/Intersection.cpp
 #include "core/intersection/Intersection.hpp"
 
+#include <algorithm>
+
 #include "core/intersection/IIntersectionPolicy.hpp"
 #include "core/intersection/PriorityRightPolicy.hpp"
+#include "core/intersection/RoundaboutPolicy.hpp"
+#include "core/intersection/StopPolicy.hpp"
 #include "core/intersection/TrafficLightPolicy.hpp"
 
 namespace {
@@ -13,7 +17,10 @@ makePolicyFor(RegulationType type) {
     switch (type) {
         case RegulationType::TRAFFIC_LIGHT:  return std::make_unique<TrafficLightPolicy>();
         case RegulationType::PRIORITY_RIGHT: return std::make_unique<PriorityRightPolicy>();
-        default: return std::make_unique<PriorityRightPolicy>();  // fallback raisonnable
+        case RegulationType::STOP:           return std::make_unique<StopPolicy>();
+        case RegulationType::ROUNDABOUT:     return std::make_unique<RoundaboutPolicy>();
+        case RegulationType::YIELD:          return std::make_unique<PriorityRightPolicy>(); // approximation
+        default:                             return std::make_unique<PriorityRightPolicy>();
     }
 }
 
@@ -105,3 +112,36 @@ int                                  Intersection::getId()           const { ret
 RegulationType                       Intersection::getType()         const { return type; }
 const std::vector<core::TileCoord>&  Intersection::getCoveredTiles() const { return coveredTiles; }
 const std::vector<Approach>&         Intersection::getApproaches()   const { return approaches; }
+
+core::Vec2 Intersection::getWorldCenter(float ts) const {
+    if (coveredTiles.empty()) return {0.f, 0.f};
+    core::Vec2 c{0.f, 0.f};
+    for (const auto& t : coveredTiles) {
+        c.x += t.x * ts + ts / 2.f;
+        c.y += t.y * ts + ts / 2.f;
+    }
+    const float n = static_cast<float>(coveredTiles.size());
+    return { c.x / n, c.y / n };
+}
+
+float Intersection::getOuterRadius(float ts) const {
+    if (coveredTiles.empty()) return ts;
+    float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+    for (const auto& t : coveredTiles) {
+        const float cx = t.x * ts + ts / 2.f;
+        const float cy = t.y * ts + ts / 2.f;
+        minX = std::min(minX, cx); maxX = std::max(maxX, cx);
+        minY = std::min(minY, cy); maxY = std::max(maxY, cy);
+    }
+    const float bw = (maxX - minX) + ts;
+    const float bh = (maxY - minY) + ts;
+    return std::max(bw, bh) / 2.f;
+}
+
+float Intersection::getLaneRadius(float ts) const {
+    const float outerR = getOuterRadius(ts);
+    // Grand rond-point (> 4 tiles) : ilot central, on roule au milieu de
+    // l'anneau [outerR - ts, outerR]. Mini (2x2) : pas d'ilot, cercle ts/2.
+    const bool large = coveredTiles.size() > 4;
+    return large ? (outerR - ts * 0.5f) : (outerR * 0.5f);
+}

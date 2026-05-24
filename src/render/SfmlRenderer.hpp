@@ -23,6 +23,10 @@ public:
     void drawAgent(const IAgent& agent) override;
     void drawAgentDebug(const IAgent& agent) override;
 
+    void drawBuildFootprint(int gridX, int gridY, int wTiles, int hTiles,
+                            float tileSize, core::Color fill) override;
+    void drawHoverHighlight(int gridX, int gridY, float tileSize) override;
+
     // Force la regeneration de la texture cache au prochain drawWorldMap.
     void invalidateMapCache() { mapCacheValid_ = false; }
 

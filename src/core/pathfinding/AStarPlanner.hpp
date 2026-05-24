@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/intersection/Intersection.hpp"
 #include "core/math/TileCoord.hpp"
 #include "core/world/World.hpp"
 
@@ -42,8 +43,21 @@ public:
             return emptyPath;
         }
 
+        const float tileSizeForLookup = world.getTileSize();
         auto isInter = [&](core::TileCoord t) {
             return world.getTile(t.x, t.y).roadType == RoadType::INTERSECTION;
+        };
+        // Cap dynamique : carrefour classique 2x2 -> 3 cellules max (anti
+        // demi-tour en spirale). Seul un ROND-POINT autorise la traversee de
+        // tout son anneau (sinon impossible d'en faire le tour).
+        auto interCellCapAt = [&](core::TileCoord t) -> int {
+            const Intersection* it = world.getIntersectionAt(
+                t.x * tileSizeForLookup + tileSizeForLookup / 2.f,
+                t.y * tileSizeForLookup + tileSizeForLookup / 2.f);
+            if (!it) return 3;
+            if (it->getType() == RegulationType::ROUNDABOUT)
+                return std::max<int>(3, static_cast<int>(it->getCoveredTiles().size()));
+            return 3;
         };
 
         struct State {
@@ -126,10 +140,9 @@ public:
                         nextCellsInInter = 1;
                     }
                     // Filtre 2 : plafond cellules visitees dans la meme intersection.
-                    // 2x2 = 4 cellules au total. Permettre les 3 premieres autorise
-                    // tout droit + virage simple ; bloquer la 4e ferme la porte
-                    // aux trajectoires en zigzag qui cumuleraient ~270 deg de virage.
-                    if (nextCellsInInter > 3) continue;
+                    // Cap = max(3, taille de l'anneau) pour permettre la traversee
+                    // d'un grand rond-point sans casser le filtre U-turn 2x2.
+                    if (nextCellsInInter > interCellCapAt(neighbor)) continue;
                 } else {
                     if (curIsInter && current.entryDir != core::TileCoord{0, 0}) {
                         // Filtre 3 : sortie d'intersection opposee a l'entree.

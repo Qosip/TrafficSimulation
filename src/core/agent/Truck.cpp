@@ -8,6 +8,8 @@ Truck::Truck(float startX, float startY) : Vehicle(startX, startY) {
     bodySize  = {80.f, 30.f};
     bodyColor = {255, 0, 0, 255}; // Red
 
+    setPersonality(core::agent::profiles::truckDriver());
+
     // Profil IDM camion : prudent, time headway plus long, decel limitee.
     core::behavior::IdmParams p;
     p.T     = 2.0f;

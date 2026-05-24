@@ -16,6 +16,9 @@ enum class BlockReason {
     LEADER_VEHICLE,       // Vehicule reel en face, IDM freine
     INTERSECTION_RED,     // Feu rouge / orange
     INTERSECTION_YIELD,   // Gap acceptance refuse (priorite a droite)
+    INTERSECTION_STOP,    // Arret obligatoire panneau STOP
+    BREAKDOWN,            // En panne (timer)
+    OVERTAKING,           // En manoeuvre de depassement
 };
 
 inline const char* toString(BlockReason r) {
@@ -28,6 +31,9 @@ inline const char* toString(BlockReason r) {
         case BlockReason::LEADER_VEHICLE:     return "Bloque par vehicule";
         case BlockReason::INTERSECTION_RED:   return "Feu rouge / orange";
         case BlockReason::INTERSECTION_YIELD: return "Cede priorite (droite)";
+        case BlockReason::INTERSECTION_STOP:  return "Marque l'arret (STOP)";
+        case BlockReason::BREAKDOWN:          return "En panne";
+        case BlockReason::OVERTAKING:         return "Depassement en cours";
     }
     return "?";
 }

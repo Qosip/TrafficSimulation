@@ -9,6 +9,8 @@ Car::Car(float startX, float startY) : Vehicle(startX, startY, 50.f) {
     bodySize  = {30.f, 15.f};
     bodyColor = {0, 0, 255, 255}; // Blue
 
+    setPersonality(core::agent::profiles::normalDriver());
+
     // Profil IDM voiture : reactive, time headway court, decel confortable elevee.
     core::behavior::IdmParams p;
     p.T     = 1.2f;
@@ -16,5 +18,5 @@ Car::Car(float startX, float startY) : Vehicle(startX, startY, 50.f) {
     p.aMax  = maxAcceleration;
     p.bComf = 80.f;
     p.delta = 4.f;
-    setIdmParams(p);
+    setIdmParams(p);   // applique automatiquement la personnalite
 }

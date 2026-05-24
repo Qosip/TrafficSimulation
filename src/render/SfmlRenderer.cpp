@@ -84,52 +84,193 @@ void SfmlRenderer::drawIntersections(const World& world) {
     const float ts = world.getTileSize();
     for (const auto& inter : world.getIntersections()) {
 
-        if (inter.getType() == RegulationType::TRAFFIC_LIGHT) {
-            for (const auto& app : inter.getApproaches()) {
-                sf::CircleShape light(6.f);
-                light.setOrigin(6.f, 6.f);
-                light.setOutlineThickness(1.f);
-                light.setOutlineColor(sf::Color::Black);
-
-                float px = app.entryTile.x * ts + ts / 2.f;
-                float py = app.entryTile.y * ts + ts / 2.f;
-
-                switch (app.direction) {
-                    case Approach::Direction::NORTH: px += ts * 0.35f; break;
-                    case Approach::Direction::SOUTH: px -= ts * 0.35f; break;
-                    case Approach::Direction::EAST:  py += ts * 0.35f; break;
-                    case Approach::Direction::WEST:  py -= ts * 0.35f; break;
-                }
-                light.setPosition(px, py);
-
-                switch (inter.getLightState(app.direction)) {
-                    case LightState::GREEN:  light.setFillColor(sf::Color::Green); break;
-                    case LightState::ORANGE: light.setFillColor(sf::Color(255, 165, 0)); break;
-                    case LightState::RED:    light.setFillColor(sf::Color::Red); break;
-                }
-                target_.draw(light);
-            }
+        // Calcul centre commun pour les panneaux centres.
+        const auto& tiles = inter.getCoveredTiles();
+        if (tiles.empty()) continue;
+        sf::Vector2f center(0.f, 0.f);
+        for (const auto& tile : tiles) {
+            center.x += tile.x * ts + ts / 2.f;
+            center.y += tile.y * ts + ts / 2.f;
         }
+        center.x /= static_cast<float>(tiles.size());
+        center.y /= static_cast<float>(tiles.size());
 
-        if (inter.getType() == RegulationType::PRIORITY_RIGHT) {
-            const auto& tiles = inter.getCoveredTiles();
-            if (tiles.empty()) continue;
-            sf::Vector2f center(0.f, 0.f);
-            for (const auto& tile : tiles) {
-                center.x += tile.x * ts + ts / 2.f;
-                center.y += tile.y * ts + ts / 2.f;
+        switch (inter.getType()) {
+            case RegulationType::TRAFFIC_LIGHT: {
+                for (const auto& app : inter.getApproaches()) {
+                    // Boitier noir 3 LEDs verticales (R/O/V) + LED active en grand.
+                    float px = app.entryTile.x * ts + ts / 2.f;
+                    float py = app.entryTile.y * ts + ts / 2.f;
+                    switch (app.direction) {
+                        case Approach::Direction::NORTH: px += ts * 0.35f; break;
+                        case Approach::Direction::SOUTH: px -= ts * 0.35f; break;
+                        case Approach::Direction::EAST:  py += ts * 0.35f; break;
+                        case Approach::Direction::WEST:  py -= ts * 0.35f; break;
+                    }
+                    sf::RectangleShape box(sf::Vector2f(8.f, 20.f));
+                    box.setOrigin(4.f, 10.f);
+                    box.setPosition(px, py);
+                    box.setFillColor(sf::Color(20, 20, 20, 230));
+                    box.setOutlineColor(sf::Color(0, 0, 0));
+                    box.setOutlineThickness(1.f);
+                    target_.draw(box);
+
+                    const LightState st = inter.getLightState(app.direction);
+                    auto drawLed = [&](float oy, sf::Color on, sf::Color off, bool active) {
+                        sf::CircleShape led(2.5f);
+                        led.setOrigin(2.5f, 2.5f);
+                        led.setPosition(px, py + oy);
+                        led.setFillColor(active ? on : off);
+                        target_.draw(led);
+                    };
+                    drawLed(-6.f, sf::Color::Red,           sf::Color(60,20,20), st == LightState::RED);
+                    drawLed( 0.f, sf::Color(255, 165, 0),   sf::Color(60,40,20), st == LightState::ORANGE);
+                    drawLed( 6.f, sf::Color::Green,         sf::Color(20,60,20), st == LightState::GREEN);
+                }
+                break;
             }
-            center.x /= static_cast<float>(tiles.size());
-            center.y /= static_cast<float>(tiles.size());
 
-            sf::CircleShape diamond(8.f, 4);
-            diamond.setOrigin(8.f, 8.f);
-            diamond.setPosition(center);
-            diamond.setFillColor(sf::Color(255, 204, 0));
-            diamond.setRotation(45.f);
-            target_.draw(diamond);
+            case RegulationType::PRIORITY_RIGHT: {
+                // Losange jaune (panneau "Vous avez la priorite").
+                sf::CircleShape diamond(10.f, 4);
+                diamond.setOrigin(10.f, 10.f);
+                diamond.setPosition(center);
+                diamond.setFillColor(sf::Color(255, 204, 0));
+                diamond.setOutlineColor(sf::Color::Black);
+                diamond.setOutlineThickness(1.f);
+                diamond.setRotation(45.f);
+                target_.draw(diamond);
+                break;
+            }
+
+            case RegulationType::STOP: {
+                // Panneau STOP : octogone rouge avec ecrit "S" central.
+                sf::CircleShape octa(12.f, 8);
+                octa.setOrigin(12.f, 12.f);
+                octa.setPosition(center);
+                octa.setFillColor(sf::Color(200, 30, 30));
+                octa.setOutlineColor(sf::Color::White);
+                octa.setOutlineThickness(2.f);
+                octa.setRotation(22.5f);
+                target_.draw(octa);
+                // Marque centrale
+                sf::RectangleShape bar(sf::Vector2f(10.f, 2.f));
+                bar.setOrigin(5.f, 1.f);
+                bar.setPosition(center);
+                bar.setFillColor(sf::Color::White);
+                target_.draw(bar);
+                break;
+            }
+
+            case RegulationType::ROUNDABOUT: {
+                // Taille dynamique : on derive le rayon des coveredTiles.
+                // BBOX -> outerRadius = max(largeur, hauteur) / 2.
+                float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+                for (const auto& t : tiles) {
+                    const float cx = t.x * ts + ts / 2.f;
+                    const float cy = t.y * ts + ts / 2.f;
+                    if (cx < minX) minX = cx;
+                    if (cy < minY) minY = cy;
+                    if (cx > maxX) maxX = cx;
+                    if (cy > maxY) maxY = cy;
+                }
+                const float bw = (maxX - minX) + ts;
+                const float bh = (maxY - minY) + ts;
+                const float outerR = std::max(bw, bh) / 2.f;
+                // Interior : pelouse (couleur fond) si rond-point >= 4x4.
+                const bool  isLarge = (tiles.size() > 4);
+                const float innerR  = isLarge ? std::max(0.f, outerR - ts) : 0.f;
+
+                // Cercle externe = bordure visible.
+                sf::CircleShape outer(outerR);
+                outer.setOrigin(outerR, outerR);
+                outer.setPosition(center);
+                outer.setFillColor(sf::Color(0, 0, 0, 0));    // transparent : laisse voir la chaussee
+                outer.setOutlineColor(sf::Color(220, 220, 220));
+                outer.setOutlineThickness(2.f);
+                target_.draw(outer);
+
+                if (innerR > 4.f) {
+                    sf::CircleShape ilot(innerR);
+                    ilot.setOrigin(innerR, innerR);
+                    ilot.setPosition(center);
+                    ilot.setFillColor(sf::Color(38, 77, 44));   // pelouse
+                    ilot.setOutlineColor(sf::Color(220, 220, 220));
+                    ilot.setOutlineThickness(2.f);
+                    target_.draw(ilot);
+                } else {
+                    // Rond-point compact : petit marqueur central.
+                    sf::CircleShape dot(6.f);
+                    dot.setOrigin(6.f, 6.f);
+                    dot.setPosition(center);
+                    dot.setFillColor(sf::Color(38, 77, 44));
+                    target_.draw(dot);
+                }
+
+                const core::Vec2 Cc = inter.getWorldCenter(ts);
+                const sf::Vector2f Cv(Cc.x, Cc.y);
+
+                // Marquage d'entree/sortie INTERACTIF : de simples liseres blancs
+                // (pas de fleche) n'apparaissent qu'aux approches reellement
+                // reliees a une route. Effacer la route -> le marquage disparait.
+                for (const auto& app : inter.getApproaches()) {
+                    const Tile& at = world.getTile(app.entryTile.x, app.entryTile.y);
+                    if (at.roadType == RoadType::NONE) continue;  // pas de route -> rien
+
+                    const sf::Vector2f ec(app.entryTile.x * ts + ts / 2.f,
+                                          app.entryTile.y * ts + ts / 2.f);
+                    sf::Vector2f d(ec.x - Cv.x, ec.y - Cv.y);
+                    const float dl = std::sqrt(d.x * d.x + d.y * d.y);
+                    if (dl < 1e-3f) continue;
+                    d.x /= dl; d.y /= dl;
+
+                    const sf::Vector2f tang(-d.y, d.x);
+                    for (int sgn = -1; sgn <= 1; sgn += 2) {
+                        sf::RectangleShape edge(sf::Vector2f(14.f, 3.f));
+                        edge.setOrigin(7.f, 1.5f);
+                        edge.setPosition(Cv.x + d.x * outerR + tang.x * sgn * (ts * 0.45f),
+                                         Cv.y + d.y * outerR + tang.y * sgn * (ts * 0.45f));
+                        edge.setFillColor(sf::Color(230, 230, 230, 200));
+                        edge.setRotation(std::atan2(d.y, d.x) * core::math::RAD2DEG);
+                        target_.draw(edge);
+                    }
+                }
+                break;
+            }
+
+            case RegulationType::YIELD: {
+                // Triangle blanc pointe vers le bas avec contour rouge.
+                sf::CircleShape tri(12.f, 3);
+                tri.setOrigin(12.f, 12.f);
+                tri.setPosition(center);
+                tri.setFillColor(sf::Color::White);
+                tri.setOutlineColor(sf::Color(200, 30, 30));
+                tri.setOutlineThickness(2.f);
+                tri.setRotation(180.f);
+                target_.draw(tri);
+                break;
+            }
         }
     }
+}
+
+void SfmlRenderer::drawBuildFootprint(int gridX, int gridY, int wTiles, int hTiles,
+                                      float tileSize, core::Color fill) {
+    sf::RectangleShape r(sf::Vector2f(wTiles * tileSize, hTiles * tileSize));
+    r.setPosition(gridX * tileSize, gridY * tileSize);
+    r.setFillColor(toSfml(fill));
+    r.setOutlineColor(sf::Color(255, 255, 255, 200));
+    r.setOutlineThickness(2.f);
+    target_.draw(r);
+}
+
+void SfmlRenderer::drawHoverHighlight(int gridX, int gridY, float tileSize) {
+    sf::RectangleShape r(sf::Vector2f(tileSize, tileSize));
+    r.setPosition(gridX * tileSize, gridY * tileSize);
+    r.setFillColor(sf::Color(255, 255, 255, 28));
+    r.setOutlineColor(sf::Color(255, 220, 0, 220));
+    r.setOutlineThickness(2.f);
+    target_.draw(r);
 }
 
 void SfmlRenderer::drawFlowDebug(const World& world, float time) {

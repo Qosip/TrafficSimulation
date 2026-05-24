@@ -8,6 +8,7 @@
 
 #include "core/intersection/IntersectionTypes.hpp"
 #include "core/math/TileCoord.hpp"
+#include "core/math/Vec2.hpp"
 
 class IAgent;
 
@@ -30,6 +31,11 @@ private:
     int   currentPhase   = 0;
     float greenDuration  = 5.f;
     float orangeDuration = 1.5f;
+
+    // STOP : axe PRINCIPAL (prioritaire). true = horizontal (E-O) prioritaire,
+    // l'axe vertical (N-S) porte le panneau STOP et cede. C'est un STOP 2 voies,
+    // pas un all-way : la route principale ne s'arrete jamais.
+    bool stopMajorHorizontal_ = true;
 
     void updateTrafficLight(float dt);
 
@@ -57,4 +63,12 @@ public:
     const std::vector<Approach>&        getApproaches() const;
     bool                                coversTile(int gridX, int gridY) const;
     LightState                          getLightState(Approach::Direction dir) const;
+
+    // --- Geometrie (source unique : renderer / policies / lane partagent) ---
+    // Centre du barycentre des tiles couvertes (coords monde).
+    core::Vec2 getWorldCenter(float tileSize) const;
+    // Rayon exterieur derive de la bounding box (max(largeur, hauteur) / 2).
+    float      getOuterRadius(float tileSize) const;
+    // Rayon de la trajectoire circulaire (milieu de l'anneau roulable).
+    float      getLaneRadius(float tileSize) const;
 };
