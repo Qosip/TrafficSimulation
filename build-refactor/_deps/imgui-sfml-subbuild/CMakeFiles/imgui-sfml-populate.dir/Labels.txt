@@ -1,0 +1,14 @@
+# Target labels
+ imgui-sfml-populate
+# Source files and their labels
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/CMakeFiles/imgui-sfml-populate
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/CMakeFiles/imgui-sfml-populate.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/CMakeFiles/imgui-sfml-populate-complete.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-build.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-configure.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-download.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-install.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-mkdir.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-patch.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-test.rule
+/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/_deps/imgui-sfml-subbuild/imgui-sfml-populate-prefix/src/imgui-sfml-populate-stamp/imgui-sfml-populate-update.rule

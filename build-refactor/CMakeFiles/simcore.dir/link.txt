@@ -1,0 +1,2 @@
+/usr/bin/ar qc libsimcore.a CMakeFiles/simcore.dir/src/Camera.cpp.o CMakeFiles/simcore.dir/src/Car.cpp.o CMakeFiles/simcore.dir/src/Intersection.cpp.o CMakeFiles/simcore.dir/src/Lane.cpp.o CMakeFiles/simcore.dir/src/Perception.cpp.o CMakeFiles/simcore.dir/src/SceneBuilder.cpp.o CMakeFiles/simcore.dir/src/Truck.cpp.o CMakeFiles/simcore.dir/src/Vehicle.cpp.o CMakeFiles/simcore.dir/src/World.cpp.o
+/usr/bin/ranlib libsimcore.a
