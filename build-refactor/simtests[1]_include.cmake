@@ -1,5 +1,0 @@
-if(EXISTS "/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/simtests[1]_tests.cmake")
-  include("/mnt/c/Users/fddav/Desktop/TrafficSimulation/build-refactor/simtests[1]_tests.cmake")
-else()
-  add_test(simtests_NOT_BUILT simtests_NOT_BUILT)
-endif()
