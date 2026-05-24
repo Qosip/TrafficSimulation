@@ -3,6 +3,8 @@
 # =========================
 .idea/
 cmake-build-*/
+.claude/
+build-refactor/
 
 # =========================
 # Dossiers de compilation
