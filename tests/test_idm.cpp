@@ -52,6 +52,63 @@ TEST(IdmModel, StoppedLeaderAtMinimumGapProducesStrongBrake) {
     EXPECT_LT(a, -p.bComf) << "Doit freiner plus fort que la decel confortable (a=" << a << ")";
 }
 
+// --- stopTarget : leader virtuel FIXE (ligne de STOP / feu / yield) ----------
+//
+// Regression du "freine trop tot puis flue jusqu'a la ligne" : pour un point
+// d'arret fixe on retire le terme de time-headway v*T. A gap moyen, le freinage
+// doit donc etre NETTEMENT plus doux qu'avec l'IDM complet, tout en restant
+// franc une fois la ligne proche.
+
+TEST(IdmModel, StopTargetBrakesLaterThanFullIdmAtMidGap) {
+    IdmParams p;          // profil voiture
+    p.T     = 1.0f;
+    p.s0    = 5.f;
+    p.aMax  = 150.f;
+    p.bComf = 120.f;
+    p.delta = 4.f;
+    IdmModel idm(p);
+
+    // En croisiere (v = v0), a 150 px de la ligne.
+    LeaderInfo full;
+    full.present = true;
+    full.gap     = 150.f;
+    full.speed   = 0.f;
+    full.stopTarget = false;
+
+    LeaderInfo stop = full;
+    stop.stopTarget = true;
+
+    const float aFull = idm.computeAcceleration(150.f, 150.f, full);
+    const float aStop = idm.computeAcceleration(150.f, 150.f, stop);
+
+    // Le terme v*T (=150 px) gonfle sStar -> l'IDM complet freine fort tres tot.
+    EXPECT_LT(aFull, -p.bComf) << "IDM complet doit freiner fort a 150px (a=" << aFull << ")";
+    // Sans time-headway, a cette distance on ne fait que lever le pied.
+    EXPECT_GT(aStop, aFull) << "stopTarget doit freiner BIEN moins (aStop=" << aStop
+                            << " vs aFull=" << aFull << ")";
+    EXPECT_GT(aStop, -p.bComf) << "stopTarget : freinage doux a mi-distance (a=" << aStop << ")";
+}
+
+TEST(IdmModel, StopTargetStillBrakesHardNearLine) {
+    IdmParams p;
+    p.T     = 1.0f;
+    p.s0    = 5.f;
+    p.aMax  = 150.f;
+    p.bComf = 120.f;
+    p.delta = 4.f;
+    IdmModel idm(p);
+
+    // Tout proche de la ligne : la securite prime, freinage franc malgre stopTarget.
+    LeaderInfo stop;
+    stop.present    = true;
+    stop.gap        = 18.f;
+    stop.speed      = 0.f;
+    stop.stopTarget = true;
+
+    const float a = idm.computeAcceleration(80.f, 150.f, stop);
+    EXPECT_LT(a, -p.bComf) << "Pres de la ligne, doit freiner fort (a=" << a << ")";
+}
+
 TEST(IdmModel, LargeGapWithSameSpeedLeaderApproximatesFreeFlow) {
     IdmParams p;
     p.aMax  = 150.f;

@@ -23,6 +23,10 @@ endif()
 
 find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
 
+# Threads (std::thread du banc d'essai Monte-Carlo) : -pthread sous GCC/Clang.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 # ---------------------------------------------------------
 # 2. DEAR IMGUI + IMGUI-SFML (FetchContent)
 # ---------------------------------------------------------
@@ -60,6 +64,7 @@ target_link_libraries(simcore PUBLIC
         sfml-graphics
         sfml-window
         sfml-system
+        Threads::Threads
 )
 
 # ---------------------------------------------------------

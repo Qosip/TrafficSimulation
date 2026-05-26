@@ -23,8 +23,15 @@ float IdmModel::computeAcceleration(float selfSpeed,
 
     // Terme "interaction" : freinage en fonction du leader.
     const float dv     = v - leader.speed;
-    const float sStar0 = v * p_.T + (v * dv) / (2.f * std::sqrt(p_.aMax * p_.bComf));
-    const float sStar  = p_.s0 + std::max(0.f, sStar0);
+
+    // Time-headway : on veut rester v*T metres derriere un MOBILE. Pour un point
+    // d'arret FIXE (stopTarget) ce terme est non physique -- on s'arrete pile a
+    // la ligne -- et le conserver fait freiner beaucoup trop tot (sStar gonfle de
+    // v*T) puis fluer jusqu'a la ligne. On ne garde alors que le terme cinematique
+    // (distance de freinage confortable) + s0.
+    const float headway = leader.stopTarget ? 0.f : (v * p_.T);
+    const float sStar0  = headway + (v * dv) / (2.f * std::sqrt(p_.aMax * p_.bComf));
+    const float sStar   = p_.s0 + std::max(0.f, sStar0);
 
     // gap minimal pour eviter division par 0 (collision imminente -> freinage maximal)
     const float s        = std::max(0.5f, leader.gap);

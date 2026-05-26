@@ -9,16 +9,13 @@
 #include <memory>
 #include <vector>
 
-#include "core/agent/Car.hpp"
 #include "core/agent/IAgent.hpp"
-#include "core/agent/Truck.hpp"
-#include "core/agent/Vehicle.hpp"
 #include "core/math/Rng.hpp"
 #include "core/math/Vec2.hpp"
 #include "core/metrics/MetricsCollector.hpp"
-#include "core/pathfinding/AStarPlanner.hpp"
 #include "core/world/World.hpp"
-#include "io/SceneBuilder.hpp"
+#include "sim/McGeometry.hpp"
+#include "sim/Spawner.hpp"
 
 namespace sim {
 
@@ -26,39 +23,6 @@ namespace {
 
 constexpr float kDt    = 1.f / 60.f;
 constexpr float kTile  = 50.f;
-
-struct OriginDef {
-    core::TileCoord start;
-    core::TileCoord goals[3];   // [0] = tout droit, [1]/[2] = virages
-};
-
-// Geometrie du carrefour isole : routes 2 voies a la ligne R (E-O) et la
-// colonne C (N-S), croisement en (C,R). Convention SceneBuilder :
-//   ligne y   = voie RIGHT (vers E),  ligne y-1 = voie LEFT  (vers O)
-//   colonne x = voie UP    (vers N),  colonne x-1 = voie DOWN (vers S)
-std::vector<OriginDef> makeOrigins(int G) {
-    const int R = G / 2;
-    const int C = G / 2;
-    const core::TileCoord gN{ C,     0     };   // sortie NORD  (col C, UP)
-    const core::TileCoord gS{ C - 1, G - 1 };   // sortie SUD   (col C-1, DOWN)
-    const core::TileCoord gE{ G - 1, R     };   // sortie EST   (ligne R, RIGHT)
-    const core::TileCoord gW{ 0,     R - 1 };   // sortie OUEST (ligne R-1, LEFT)
-
-    std::vector<OriginDef> o;
-    o.push_back({ { 0,     R     }, { gE, gN, gS } });  // venant de l'OUEST -> E
-    o.push_back({ { G - 1, R - 1 }, { gW, gS, gN } });  // venant de l'EST   -> O
-    o.push_back({ { C,     G - 1 }, { gN, gE, gW } });  // venant du SUD     -> N
-    o.push_back({ { C - 1, 0     }, { gS, gW, gE } });  // venant du NORD    -> S
-    return o;
-}
-
-void buildScenario(World& world, RegulationType strat, int G) {
-    const int R = G / 2;
-    const int C = G / 2;
-    scene::buildHRoad(world, R, 0, G - 1);
-    scene::buildVRoad(world, C, 0, G - 1);
-    scene::buildCrossroad(world, C, R, 1, strat);
-}
 
 float averageOf(const std::vector<float>& v) {
     if (v.empty()) return 0.f;
@@ -94,11 +58,14 @@ ResultRow ExperimentRunner::runOne(RegulationType strat, float density,
                                    unsigned seed, const ExperimentConfig& cfg) {
     const int G = cfg.gridSize;
     World world(G, G, kTile);
-    buildScenario(world, strat, G);
+    if (strat == RegulationType::ROUNDABOUT)
+        buildIsolatedRoundabout(world, cfg.roundaboutSide, G);
+    else
+        buildIsolatedCrossroad(world, strat, G);
 
-    const std::vector<OriginDef> origins = makeOrigins(G);
+    const std::vector<OriginDef> origins = makeCrossroadOrigins(G);
     std::vector<std::unique_ptr<IAgent>> agents;
-    core::Rng rng(seed);
+    Spawner spawner(cfg.spawn, seed);            // type + profil + bruit, seede
     core::metrics::MetricsCollector mc;
 
     const float injectInterval = (density > 1e-4f) ? (1.f / density) : 1e9f;
@@ -106,16 +73,13 @@ ResultRow ExperimentRunner::runOne(RegulationType strat, float density,
 
     auto trySpawn = [&]() {
         if (static_cast<int>(agents.size()) >= cfg.maxAgents) return;
-        const OriginDef& od = origins[rng.uniformInt(0, 3)];
+        const OriginDef& od = origins[spawner.rng().uniformInt(0, 3)];
 
         // 60% tout droit, 20% / 20% virages.
-        const float roll = rng.uniform(0.f, 1.f);
+        const float roll = spawner.rng().uniform(0.f, 1.f);
         const core::TileCoord goal = (roll < 0.6f) ? od.goals[0]
                                    : (roll < 0.8f) ? od.goals[1]
                                                    : od.goals[2];
-
-        auto path = AStarPlanner::findPath(world, od.start, goal);
-        if (path.empty()) return;
 
         const core::Vec2 spawn{ od.start.x * kTile + kTile / 2.f,
                                 od.start.y * kTile + kTile / 2.f };
@@ -123,13 +87,8 @@ ResultRow ExperimentRunner::runOne(RegulationType strat, float density,
             if ((a->getPosition() - spawn).length() < kTile * 1.2f) return;  // file -> on saute
         }
 
-        std::unique_ptr<Vehicle> v;
-        if (rng.bernoulli(0.15f)) v = std::make_unique<Truck>(spawn.x, spawn.y);
-        else                      v = std::make_unique<Car>(spawn.x, spawn.y);
-        v->setPath(path, &world);
-        // Heterogeneite des conducteurs (methode de Monte-Carlo du rapport).
-        if (cfg.stochasticDrivers) v->applyGaussianHeterogeneity(rng, cfg.driverSigma);
-        agents.push_back(std::move(v));
+        auto v = spawner.spawn(world, od.start, goal);   // nullptr si pas de chemin
+        if (v) agents.push_back(std::move(v));
     };
 
     auto recycle = [&]() {
@@ -178,7 +137,7 @@ ResultRow ExperimentRunner::runOne(RegulationType strat, float density,
 }
 
 std::vector<ResultRow> ExperimentRunner::run(const ExperimentConfig& cfg,
-                                             float* progressFraction) {
+                                             std::atomic<float>* progressFraction) {
     std::vector<ResultRow> rows;
     const std::size_t total = cfg.strategies.size() * cfg.densities.size();
     std::size_t done = 0;
@@ -215,8 +174,10 @@ std::vector<ResultRow> ExperimentRunner::run(const ExperimentConfig& cfg,
             rows.push_back(acc);
 
             ++done;
-            if (progressFraction) *progressFraction = static_cast<float>(done) /
-                                                      static_cast<float>(std::max<std::size_t>(total, 1));
+            if (progressFraction)
+                progressFraction->store(static_cast<float>(done) /
+                    static_cast<float>(std::max<std::size_t>(total, 1)),
+                    std::memory_order_relaxed);
             std::cout << "[Experience] " << strategyName(strat)
                       << " densite=" << density
                       << " -> debit=" << acc.throughputPerMin
@@ -226,7 +187,7 @@ std::vector<ResultRow> ExperimentRunner::run(const ExperimentConfig& cfg,
                       << " minTTC=" << acc.minTTC << "\n";
         }
     }
-    if (progressFraction) *progressFraction = 1.f;
+    if (progressFraction) progressFraction->store(1.f, std::memory_order_relaxed);
     return rows;
 }
 

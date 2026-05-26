@@ -60,6 +60,9 @@ public:
     // Export CSV : resume agrege + series temporelles. true si ecrit.
     bool exportCsv(const std::string& path) const;
 
+    // Export JSON : meme contenu (resume + series), structure { summary, series }.
+    bool exportJson(const std::string& path) const;
+
 private:
     struct PerAgent {
         float firstTime  = 0.f;

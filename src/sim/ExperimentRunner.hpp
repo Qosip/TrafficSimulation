@@ -10,10 +10,12 @@
 // (apres warm-up). 100% headless : aucune dependance rendu/SFML.
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
 #include "core/intersection/IntersectionTypes.hpp"   // RegulationType
+#include "sim/Spawner.hpp"                            // SpawnProfile
 
 namespace sim {
 
@@ -28,8 +30,10 @@ struct ExperimentConfig {
     unsigned baseSeed      = 1337u;
     int      gridSize      = 31;     // cote de la grille (impair -> centre net)
     int      maxAgents     = 60;     // garde-fou anti-explosion (et reactivite UI)
-    bool     stochasticDrivers = true;  // heterogeneite gaussienne des conducteurs
-    float    driverSigma   = 0.15f;  // ecart-type du bruit sur T / aMax / vitesse
+    int      roundaboutSide = 4;     // cote de l'anneau si strategie == ROUNDABOUT
+
+    // Generation de trafic : type de vehicule + profils comportementaux + bruit.
+    SpawnProfile spawn{};
 };
 
 // Une ligne de resultat agregee par point (strategie, densite).
@@ -47,11 +51,12 @@ struct ResultRow {
 
 class ExperimentRunner {
 public:
-    // Execute toute la grille. Bloquant (synchrone). Trace la progression sur
-    // std::cout. Retourne une ligne par (strategie, densite), moyennee sur les
-    // runs. 'progressFraction' (optionnel) est mis a jour dans [0,1].
+    // Execute toute la grille. Synchrone (peut tourner sur un thread dedie pour
+    // ne pas figer l'UI). Trace la progression sur std::cout. Retourne une ligne
+    // par (strategie, densite), moyennee sur les runs. 'progressFraction'
+    // (optionnel, atomique) est mis a jour dans [0,1] -> lisible par l'UI.
     static std::vector<ResultRow> run(const ExperimentConfig& cfg,
-                                      float* progressFraction = nullptr);
+                                      std::atomic<float>* progressFraction = nullptr);
 
     static bool exportCsv(const std::string& path,
                           const std::vector<ResultRow>& rows);

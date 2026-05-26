@@ -196,4 +196,41 @@ bool MetricsCollector::exportCsv(const std::string& path) const {
     return true;
 }
 
+bool MetricsCollector::exportJson(const std::string& path) const {
+    std::ofstream f(path);
+    if (!f.is_open()) return false;
+
+    // Ecrit un tableau JSON de floats a partir d'une serie.
+    auto writeArray = [&f](const std::vector<float>& s) {
+        f << "[";
+        for (std::size_t k = 0; k < s.size(); ++k) {
+            if (k) f << ", ";
+            f << s[k];
+        }
+        f << "]";
+    };
+
+    f << "{\n";
+    f << "  \"summary\": {\n";
+    f << "    \"sim_time_s\": "         << agg_.simTime           << ",\n";
+    f << "    \"completed_vehicles\": " << agg_.completedVehicles << ",\n";
+    f << "    \"active_vehicles\": "    << agg_.activeVehicles    << ",\n";
+    f << "    \"throughput_per_min\": " << agg_.throughputPerMin  << ",\n";
+    f << "    \"mean_delay_s\": "       << agg_.meanDelaySec      << ",\n";
+    f << "    \"mean_speed_px_s\": "    << agg_.meanSpeed         << ",\n";
+    f << "    \"min_ttc_s\": "          << agg_.minTTC            << ",\n";
+    f << "    \"ttc_violations\": "     << agg_.ttcViolations     << ",\n";
+    f << "    \"total_stops\": "        << agg_.totalStops        << ",\n";
+    f << "    \"mean_jerk\": "          << agg_.meanJerkCompleted << "\n";
+    f << "  },\n";
+    f << "  \"series\": {\n";
+    f << "    \"throughput_per_min\": "; writeArray(histThroughput_); f << ",\n";
+    f << "    \"mean_delay_s\": ";       writeArray(histDelay_);      f << ",\n";
+    f << "    \"mean_speed\": ";         writeArray(histSpeed_);      f << ",\n";
+    f << "    \"min_ttc\": ";            writeArray(histMinTTC_);     f << "\n";
+    f << "  }\n";
+    f << "}\n";
+    return true;
+}
+
 } // namespace core::metrics

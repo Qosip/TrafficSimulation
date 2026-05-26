@@ -474,17 +474,19 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 }
             } else if (stopForceHalt) {
                 // Arret ferme PILE a la ligne : leader virtuel colle (gap 0).
-                leader          = core::behavior::LeaderInfo{};
-                leader.present  = true;
-                leader.gap      = 0.f;
-                leader.speed    = 0.f;
-                leaderIsVehicle = false;
-                leaderFromStop  = true;
+                leader            = core::behavior::LeaderInfo{};
+                leader.present    = true;
+                leader.gap        = 0.f;
+                leader.speed      = 0.f;
+                leader.stopTarget = true;   // point FIXE -> IDM sans time-headway
+                leaderIsVehicle   = false;
+                leaderFromStop    = true;
             } else if (decision.shouldStop) {
                 core::behavior::LeaderInfo virtualLeader;
-                virtualLeader.present = true;
-                virtualLeader.gap     = std::max(decision.stopLineGap, 0.f);
-                virtualLeader.speed   = 0.f;
+                virtualLeader.present    = true;
+                virtualLeader.gap        = std::max(decision.stopLineGap, 0.f);
+                virtualLeader.speed      = 0.f;
+                virtualLeader.stopTarget = true;   // ligne d'arret FIXE
 
                 if (!leader.present || virtualLeader.gap < leader.gap) {
                     leader = virtualLeader;
@@ -521,10 +523,13 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     // --- IDM ---
     pendingAccel = idm.computeAcceleration(currentSpeed, v0, leader);
 
-    // STOP : a la ligne (et tant qu'on n'est pas libere) on appuie franchement
-    // le frein -> arret net, pas de rampe a 1 km/h jusqu'au bout de la tile.
+    // STOP : marquage a la ligne. Frein FERME mais LISSE. Le leader virtuel
+    // colle (gap 0) ferait tendre l'IDM vers une deceleration quasi infinie qui
+    // annule la vitesse en UNE frame (arret en a-coup). On impose a la place une
+    // deceleration bornee (~0.75x le confort) : l'arret se fait en ~0.5 s,
+    // franc mais souple. L'anti-fluage (kCreepSpeed) absorbe le dernier px/s.
     if (stopForceHalt && !stopReleased) {
-        pendingAccel = std::min(pendingAccel, -idm.params().aMax * 2.5f);
+        pendingAccel = -idm.params().bComf * 0.75f;
     }
 
     // --- Diagnostic du motif de blocage ---

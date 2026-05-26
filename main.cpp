@@ -5,6 +5,9 @@
 
 #include <vector>
 #include <memory>
+#include <functional>
+#include <atomic>
+#include <thread>
 #include <iostream>
 #include <string>
 #include <algorithm>
@@ -22,14 +25,17 @@
 #include "core/metrics/MetricsCollector.hpp"
 #include "core/world/World.hpp"
 #include "sim/ExperimentRunner.hpp"
+#include "sim/Spawner.hpp"
+#include "sim/McLiveSession.hpp"
 #include "render/Camera.hpp"
 #include "core/pathfinding/AStarPlanner.hpp"
 #include "io/SceneBuilder.hpp"
+#include "io/ScenarioCatalog.hpp"
 #include "io/ScenarioIO.hpp"
 #include "render/SfmlRenderer.hpp"
 #include "render/SfmlInterop.hpp"
 
-enum class AppState { MAIN_MENU, SIMULATION };
+enum class AppState { MAIN_MENU, MONTE_CARLO, SIMULATION };
 enum class BuildTool {
     ROAD_CITY_50,
     ROAD_HIGHWAY_130,
@@ -62,6 +68,15 @@ std::string saveCsvDialog() {
                             { "Fichiers CSV (*.csv)", "*.csv" });
     std::string path = f.result();
     if (!path.empty() && path.find(".csv") == std::string::npos) path += ".csv";
+    return path;
+}
+
+std::string saveJsonDialog() {
+    if (!pfd::settings::available()) return "";
+    auto f = pfd::save_file("Exporter les metriques (JSON)", "metriques.json",
+                            { "Fichiers JSON (*.json)", "*.json" });
+    std::string path = f.result();
+    if (!path.empty() && path.find(".json") == std::string::npos) path += ".json";
     return path;
 }
 
@@ -105,6 +120,23 @@ int main() {
     bool expStratAim    = false;
     bool expStratPlatoon = false;
 
+    // --- Monte-Carlo (banc d'essai, ecran dedie) ---
+    sim::McLiveSession mcLive;            // mode VISUEL : injection continue rendue
+    sim::SpawnProfile  mcSpawn;           // spawner parametrable (types + profils)
+    bool  mcVisualMode    = false;        // toggle rendu visuel vs headless
+    float mcVisualDensity = 0.3f;         // veh/s pour le mode visuel
+    int   mcStopMode      = 0;            // 0=flux continu, 1=nb vehicules, 2=temps
+    int   mcMaxSpawns     = 40;           // budget de vehicules (mode 1)
+    int   mcTimeLimitSec  = 60;           // duree simulee max (mode 2)
+    int   mcRoundaboutSide = 4;           // cote de l'anneau si rond-point (2..8)
+    bool  expStratRoundabout = false;     // inclure le rond-point dans le balayage
+    // Mode HEADLESS : ExperimentRunner sur un thread dedie (UI reactive).
+    std::thread          mcThread;
+    std::atomic<float>   mcProgress{0.f};
+    std::atomic<bool>    mcRunning{false};
+    std::atomic<bool>    mcDone{false};
+    std::vector<sim::ResultRow> mcThreadResults;
+
     // RNG d'UI (heterogeneite gaussienne appliquee a la flotte a la demande).
     core::Rng uiRng(0xA11CEULL);
 
@@ -126,6 +158,17 @@ int main() {
     int  roundaboutSide = 4;     // cote en tiles, PAIR (2,4,6,8). 2 = mini, 4 = anneau 4x4...
     bool isPaused = false;
     float simSpeedFactor = 1.0f;
+
+    // --- Cycle de vie / fin de simulation ---
+    // simFinished : plus aucun agent n'a de route a parcourir -> on fige la sim
+    //               ET la collecte de metriques, et on propose la sauvegarde.
+    // everHadAgents : evite de declarer "fini" une scene vierge (0 agent).
+    // currentRebuild : reconstruit integralement la scene courante (Rejouer /
+    //                  Reset), indispensable car les agents arrives sont DETRUITS.
+    bool simFinished    = false;
+    bool everHadAgents  = false;
+    bool endDialogOpened = false;   // le pop-up de fin a-t-il deja ete ouvert ?
+    std::function<void()> currentRebuild;
 
     // --- Mode build interactif ---
     bool draggingRoad  = false;    // trace de route par glisser en cours
@@ -163,21 +206,92 @@ int main() {
         }
     };
 
-    auto initNewSimulation = [&]() {
-        world = std::make_unique<World>(GRID_W, GRID_H, TILE_SIZE);
-        agents.clear();
-
-        scene::buildDefaultNetwork(*world);
-
-        camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
+    // Entree en simulation a partir d'un 'world' deja construit (camera centree,
+    // cache carte invalide, metriques remises a zero, flags de fin reinitialises).
+    // Tail commun a tous les points de lancement.
+    auto enterSimulationFromCurrentWorld = [&]() {
+        if (!world) return;
+        camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f,
+                                          world->getWorldPixelHeight() / 2.f,
+                                          (float)winW - PANEL_WIDTH, (float)winH);
         camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
-
-        scene::spawnDefaultAgents(agents, *world);
-
         renderer.invalidateMapCache();
         metrics.reset();
-        currentState = AppState::SIMULATION;
+        simFinished     = false;
+        everHadAgents   = !agents.empty();
+        endDialogOpened = false;
+        currentState    = AppState::SIMULATION;
         clock.restart();
+    };
+
+    auto initNewSimulation = [&]() {
+        currentRebuild = [&]() {
+            mcLive.stop();
+            world = std::make_unique<World>(GRID_W, GRID_H, TILE_SIZE);
+            agents.clear();
+            scene::buildDefaultNetwork(*world);
+            scene::spawnDefaultAgents(agents, *world);
+            enterSimulationFromCurrentWorld();
+        };
+        currentRebuild();
+    };
+
+    // Construit puis lance un scenario du catalogue en un clic. La fonction de
+    // construction est memorisee comme 'currentRebuild' pour Rejouer / Reset
+    // (les agents arrives sont detruits, on ne peut pas se contenter de
+    // resetToStart sur les survivants).
+    auto launchScenario = [&](const scene::ScenarioBuildFn& build) {
+        currentRebuild = [&, build]() {
+            mcLive.stop();
+            build(world, agents);
+            enterSimulationFromCurrentWorld();
+        };
+        currentRebuild();
+    };
+
+    // Lance le mode Monte-Carlo VISUEL : carrefour isole alimente en continu,
+    // rendu dans la boucle de simulation. Memorise dans currentRebuild (Reset).
+    auto launchVisualMc = [&](RegulationType strat) {
+        // Fige la condition d'arret + le cote du rond-point au lancement
+        // (rejouabilite via Reset).
+        const int   maxN = (mcStopMode == 1) ? mcMaxSpawns : 0;
+        const float tLim = (mcStopMode == 2) ? static_cast<float>(mcTimeLimitSec) : 0.f;
+        const int   side = mcRoundaboutSide;
+        currentRebuild = [&, strat, maxN, tLim, side]() {
+            mcLive.start(world, agents, strat, mcVisualDensity, mcSpawn, 1337u,
+                         maxN, tLim, side);
+            enterSimulationFromCurrentWorld();   // everHadAgents=false (0 agent) -> fin geree par mcLive
+        };
+        currentRebuild();
+    };
+
+    // Lance le banc d'essai Monte-Carlo HEADLESS sur un thread dedie (UI fluide).
+    auto launchHeadlessMc = [&]() {
+        if (mcRunning.load()) return;
+        sim::ExperimentConfig cfg;
+        cfg.durationSec    = static_cast<float>(expDurationSec);
+        cfg.runsPerPoint   = expRuns;
+        cfg.spawn          = mcSpawn;
+        cfg.roundaboutSide = mcRoundaboutSide;
+        cfg.strategies.clear();
+        if (expStratFixed)      cfg.strategies.push_back(RegulationType::FIXED_PRIORITY);
+        if (expStratP2P)        cfg.strategies.push_back(RegulationType::P2P);
+        if (expStratAim)        cfg.strategies.push_back(RegulationType::AIM);
+        if (expStratPlatoon)    cfg.strategies.push_back(RegulationType::VIRTUAL_PLATOON);
+        if (expStratRoundabout) cfg.strategies.push_back(RegulationType::ROUNDABOUT);
+        if (cfg.strategies.empty()) return;
+
+        if (mcThread.joinable()) mcThread.join();   // surete : run precedent
+        mcThreadResults.clear();
+        expResults.clear();
+        mcProgress.store(0.f);
+        mcDone.store(false);
+        mcRunning.store(true);
+        mcThread = std::thread([&, cfg]() {
+            auto res = sim::ExperimentRunner::run(cfg, &mcProgress);
+            mcThreadResults = std::move(res);
+            mcDone.store(true, std::memory_order_release);
+        });
     };
 
     while (window.isOpen()) {
@@ -332,38 +446,220 @@ int main() {
         if (currentState == AppState::MAIN_MENU) {
             window.setView(sf::View(sf::FloatRect(0.f, 0.f, (float)winW, (float)winH)));
 
-            ImGui::SetNextWindowPos(ImVec2(winW / 2.f - 200.f, winH / 2.f - 180.f));
-            ImGui::SetNextWindowSize(ImVec2(400.f, 360.f));
+            ImGui::SetNextWindowPos(ImVec2(winW / 2.f - 240.f, winH / 2.f - 280.f));
+            ImGui::SetNextWindowSize(ImVec2(480.f, 560.f));
             ImGui::Begin("Menu Principal - MAS", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
             ImGui::Text("Simulateur Multi-Agents Auto");
             ImGui::Separator();
             ImGui::Spacing();
 
-            if (ImGui::Button("Nouvelle Simulation", ImVec2(-1.f, 45.f))) initNewSimulation();
-            if (ImGui::Button("Demo Comportements (rond-point / depassement / STOP)", ImVec2(-1.f, 45.f))) {
-                scene::buildDemoScenario(world, agents, TILE_SIZE);
-                if (world) {
-                    camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
-                    camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
-                    renderer.invalidateMapCache();
-                    metrics.reset();
-                    currentState = AppState::SIMULATION;
-                    clock.restart();
+            // ---- Scenarios de presentation (catalogue, lancement en 1 clic) ----
+            ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.f, 1.f), "Scenarios de presentation");
+            const auto& catalog = scene::scenarioCatalog();
+            static int selScenario = 0;
+            if (selScenario >= (int)catalog.size()) selScenario = 0;
+
+            ImGui::SetNextItemWidth(-1.f);
+            if (ImGui::BeginCombo("##scenarioCombo", catalog[selScenario].name.c_str())) {
+                std::string lastCat;
+                for (int i = 0; i < (int)catalog.size(); ++i) {
+                    if (catalog[i].category != lastCat) {
+                        lastCat = catalog[i].category;
+                        if (i != 0) ImGui::Separator();
+                        ImGui::TextDisabled("%s", lastCat.c_str());
+                    }
+                    const bool sel = (i == selScenario);
+                    if (ImGui::Selectable(catalog[i].name.c_str(), sel)) selScenario = i;
+                    if (sel) ImGui::SetItemDefaultFocus();
                 }
+                ImGui::EndCombo();
             }
-            if (ImGui::Button("Charger un Scenario (TXT)", ImVec2(-1.f, 45.f))) {
+            ImGui::TextWrapped("%s", catalog[selScenario].description.c_str());
+            if (ImGui::Button("Lancer le scenario", ImVec2(-1.f, 42.f)))
+                launchScenario(catalog[selScenario].build);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // ---- Monte-Carlo : bouton DEDIE (separe des scenarios) ----
+            ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "Banc d'essai quantitatif");
+            if (ImGui::Button("Monte-Carlo (densite x strategie)", ImVec2(-1.f, 40.f)))
+                currentState = AppState::MONTE_CARLO;
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            // ---- Autres points d'entree ----
+            if (ImGui::Button("Nouvelle Simulation (vierge editable)", ImVec2(-1.f, 38.f)))
+                initNewSimulation();
+            if (ImGui::Button("Charger un Scenario (TXT)", ImVec2(-1.f, 38.f))) {
                 std::string path = openFileDialog();
                 if (!path.empty() && io::importScenario(path, world, agents)) {
-                    camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
-                    camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
-                    renderer.invalidateMapCache();
-                    metrics.reset();
-                    currentState = AppState::SIMULATION;
-                    clock.restart();
+                    currentRebuild = [&, path]() {
+                        if (io::importScenario(path, world, agents))
+                            enterSimulationFromCurrentWorld();
+                    };
+                    enterSimulationFromCurrentWorld();
                 }
             }
-            if (ImGui::Button("Quitter l'Application", ImVec2(-1.f, 45.f))) window.close();
+            if (ImGui::Button("Quitter l'Application", ImVec2(-1.f, 38.f))) window.close();
+
+            ImGui::End();
+        }
+        else if (currentState == AppState::MONTE_CARLO) {
+            // Recupere les resultats du thread headless des qu'il a termine.
+            if (mcRunning.load() && mcDone.load(std::memory_order_acquire)) {
+                if (mcThread.joinable()) mcThread.join();
+                expResults = std::move(mcThreadResults);
+                mcRunning.store(false);
+            }
+
+            window.setView(sf::View(sf::FloatRect(0.f, 0.f, (float)winW, (float)winH)));
+            ImGui::SetNextWindowPos(ImVec2(winW / 2.f, winH / 2.f), ImGuiCond_Always,
+                                    ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowSize(ImVec2(620.f, std::min((float)winH - 30.f, 740.f)));
+            ImGui::Begin("Monte-Carlo - Banc d'essai", nullptr,
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+            ImGui::TextWrapped("Compare des strategies de coordination sur un carrefour "
+                               "isole alimente a debit croissant. VISUEL = rendu temps "
+                               "reel d'un point ; HEADLESS = balayage complet "
+                               "(densite 0.1->0.8 v/s) en arriere-plan, puis tableau/courbes.");
+            ImGui::Separator();
+
+            ImGui::Checkbox("Rendu visuel de l'execution", &mcVisualMode);
+            ImGui::SameLine();
+            ImGui::TextDisabled(mcVisualMode ? "(temps reel, 1 point)"
+                                             : "(headless, balayage complet)");
+
+            // --- Spawner parametrable (types + profils comportementaux) ---
+            if (ImGui::CollapsingHeader("Spawner (trafic stochastique)",
+                                        ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Proba camion", &mcSpawn.wTruck, 0.f, 1.f, "%.2f");
+                mcSpawn.wCar = 1.f - mcSpawn.wTruck;
+                ImGui::TextDisabled("Profils conducteurs (poids relatifs) :");
+                ImGui::SliderFloat("Normal",   &mcSpawn.wNormal,     0.f, 1.f, "%.2f");
+                ImGui::SliderFloat("Agressif", &mcSpawn.wAggressive, 0.f, 1.f, "%.2f");
+                ImGui::SliderFloat("Prudent",  &mcSpawn.wCalm,       0.f, 1.f, "%.2f");
+                ImGui::Checkbox("Heterogeneite gaussienne", &mcSpawn.gaussianHeterogeneity);
+                if (mcSpawn.gaussianHeterogeneity)
+                    ImGui::SliderFloat("Sigma (T/aMax/vitesse)", &mcSpawn.driverSigma,
+                                       0.f, 0.4f, "%.2f");
+            }
+
+            if (mcVisualMode) {
+                static const RegulationType vStrats[] = {
+                    RegulationType::FIXED_PRIORITY, RegulationType::P2P,
+                    RegulationType::AIM,            RegulationType::VIRTUAL_PLATOON,
+                    RegulationType::PRIORITY_RIGHT, RegulationType::STOP,
+                    RegulationType::TRAFFIC_LIGHT,  RegulationType::ROUNDABOUT
+                };
+                static const char* vNames[] = {
+                    "Priorite fixe", "P2P (VANET)", "AIM (reservation)", "Peloton virtuel",
+                    "Priorite a droite", "STOP", "Feux", "Rond-point"
+                };
+                static int vIdx = 0;
+                ImGui::Combo("Strategie", &vIdx, vNames, IM_ARRAYSIZE(vNames));
+                if (vStrats[vIdx] == RegulationType::ROUNDABOUT) {
+                    ImGui::SliderInt("Cote anneau", &mcRoundaboutSide, 2, 8, "%d tiles");
+                    if (mcRoundaboutSide % 2 != 0) ++mcRoundaboutSide;   // toujours PAIR
+                }
+                ImGui::SliderFloat("Densite (veh/s)", &mcVisualDensity, 0.05f, 1.0f, "%.2f");
+
+                // Condition d'arret : flux perpetuel, budget de vehicules, ou temps.
+                ImGui::TextDisabled("Condition d'arret :");
+                ImGui::RadioButton("Flux continu (observation)", &mcStopMode, 0);
+                ImGui::RadioButton("Nombre de vehicules", &mcStopMode, 1);
+                if (mcStopMode == 1) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(140.f);
+                    ImGui::SliderInt("##maxspawn", &mcMaxSpawns, 5, 300, "%d veh");
+                }
+                ImGui::RadioButton("Limite de temps", &mcStopMode, 2);
+                if (mcStopMode == 2) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(140.f);
+                    ImGui::SliderInt("##tlim", &mcTimeLimitSec, 10, 300, "%d s");
+                }
+                ImGui::TextDisabled("A la fin : pop-up + export des metriques (CSV/JSON).");
+
+                if (ImGui::Button("Lancer en visuel", ImVec2(-1.f, 40.f)))
+                    launchVisualMc(vStrats[vIdx]);
+            } else {
+                ImGui::SliderInt("Duree mesure (s)", &expDurationSec, 20, 180);
+                ImGui::SliderInt("Runs / point", &expRuns, 1, 5);
+                ImGui::TextDisabled("Strategies a comparer :");
+                ImGui::Checkbox("Prio. Fixe", &expStratFixed);  ImGui::SameLine();
+                ImGui::Checkbox("P2P", &expStratP2P);           ImGui::SameLine();
+                ImGui::Checkbox("AIM", &expStratAim);           ImGui::SameLine();
+                ImGui::Checkbox("Peloton", &expStratPlatoon);
+                ImGui::Checkbox("Rond-point", &expStratRoundabout);
+                if (expStratRoundabout) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(150.f);
+                    ImGui::SliderInt("Cote anneau", &mcRoundaboutSide, 2, 8, "%d tiles");
+                    if (mcRoundaboutSide % 2 != 0) ++mcRoundaboutSide;
+                }
+
+                if (mcRunning.load()) {
+                    ImGui::ProgressBar(mcProgress.load(), ImVec2(-1.f, 0.f));
+                    ImGui::TextDisabled("Calcul en arriere-plan (UI reactive)...");
+                } else if (ImGui::Button("Lancer le balayage", ImVec2(-1.f, 40.f))) {
+                    launchHeadlessMc();
+                }
+
+                if (!expResults.empty()) {
+                    if (ImGui::BeginTable("expTable", 5, ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                        ImGui::TableSetupColumn("Strat");
+                        ImGui::TableSetupColumn("Dens");
+                        ImGui::TableSetupColumn("Debit");
+                        ImGui::TableSetupColumn("Delay");
+                        ImGui::TableSetupColumn("TTC");
+                        ImGui::TableHeadersRow();
+                        for (const auto& r : expResults) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::TextUnformatted(sim::ExperimentRunner::strategyName(r.strategy));
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.density);
+                            ImGui::TableNextColumn(); ImGui::Text("%.1f", r.throughputPerMin);
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.meanDelaySec);
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.minTTC);
+                        }
+                        ImGui::EndTable();
+                    }
+
+                    std::vector<RegulationType> strats;
+                    for (const auto& r : expResults)
+                        if (std::find(strats.begin(), strats.end(), r.strategy) == strats.end())
+                            strats.push_back(r.strategy);
+                    for (RegulationType st : strats) {
+                        std::vector<float> delay, thr;
+                        for (const auto& r : expResults) if (r.strategy == st) {
+                            delay.push_back(r.meanDelaySec);
+                            thr.push_back(r.throughputPerMin);
+                        }
+                        char lab[64];
+                        std::snprintf(lab, sizeof(lab), "Delay %s", sim::ExperimentRunner::strategyName(st));
+                        ImGui::PlotLines(lab, delay.data(), static_cast<int>(delay.size()), 0,
+                                         nullptr, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
+                        std::snprintf(lab, sizeof(lab), "Debit %s", sim::ExperimentRunner::strategyName(st));
+                        ImGui::PlotLines(lab, thr.data(), static_cast<int>(thr.size()), 0,
+                                         nullptr, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
+                    }
+                    ImGui::TextDisabled("Axe X = densite croissante (0.1->0.8 v/s)");
+                    if (ImGui::Button("Exporter resultats CSV", ImVec2(-1.f, 28.f))) {
+                        std::string path = saveCsvDialog();
+                        if (!path.empty()) sim::ExperimentRunner::exportCsv(path, expResults);
+                    }
+                }
+            }
+
+            ImGui::Separator();
+            if (ImGui::Button("Retour au menu", ImVec2(-1.f, 32.f)) && !mcRunning.load())
+                currentState = AppState::MAIN_MENU;
 
             ImGui::End();
         }
@@ -373,10 +669,14 @@ int main() {
             const float frameTime = isPaused ? 0.f : clock.restart().asSeconds() * simSpeedFactor;
             if (isPaused) { clock.restart(); simAccumulator = 0.f; }
 
-            if (world && !isPaused) {
+            // Une fois la simulation terminee, tout est fige : ni physique, ni
+            // metriques (collecte formellement arretee), seul le pop-up reste.
+            if (world && !isPaused && !simFinished) {
                 simAccumulator += frameTime;
                 int steps = 0;
                 while (simAccumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+                    // Monte-Carlo visuel : injection continue de trafic stochastique.
+                    if (mcLive.active()) mcLive.inject(*world, agents, FIXED_DT);
                     world->updateIntersections(FIXED_DT);
                     for (auto& agent : agents) agent->computeDecision(agents, *world);
                     for (auto& agent : agents) agent->integrate(FIXED_DT);
@@ -387,6 +687,48 @@ int main() {
                 // Si le frame a accumule trop de retard, on jette le surplus
                 // pour eviter le scenario "spirale de la mort".
                 if (steps >= MAX_SUBSTEPS) simAccumulator = 0.f;
+
+                // --- Cycle de vie : DESTRUCTION des agents arrives -------------
+                // Un agent a BlockReason::AT_GOAL implique qu'il etait deja
+                // hasFinishedPath au computeDecision du dernier sous-pas, donc que
+                // metrics.sample l'a vu "complete" dans ce meme sous-pas. On peut
+                // le detruire sans perdre sa metrique : il cesse alors d'interagir
+                // (perception, policies d'intersection, negociation P2P).
+                if (steps > 0) {
+                    agents.erase(std::remove_if(agents.begin(), agents.end(),
+                        [](const std::unique_ptr<IAgent>& a) {
+                            return a && a->getBlockReason() ==
+                                   core::agent::BlockReason::AT_GOAL;
+                        }), agents.end());
+
+                    // --- Detection de fin de simulation -------------------------
+                    // Les agents arrives (AT_GOAL) viennent d'etre detruits ci-dessus
+                    // APRES avoir ete comptes. Reste "actif" tout agent dont le motif
+                    // n'est pas NO_PATH : un agent qui roule, attend a un feu, ou
+                    // vient juste de finir (motif encore NONE, passera AT_GOAL au
+                    // prochain pas et sera alors compte). Aucun vehicule arrive n'est
+                    // donc perdu dans le comptage.
+                    bool anyActive = false;
+                    for (const auto& a : agents)
+                        if (a && a->getBlockReason() !=
+                                 core::agent::BlockReason::NO_PATH) {
+                            anyActive = true;
+                            break;
+                        }
+
+                    if (mcLive.active()) {
+                        // Monte-Carlo borne : fin par limite de TEMPS (immediate),
+                        // ou par BUDGET de vehicules epuise puis trafic draine.
+                        // Sans limite (flux perpetuel) -> ne se termine jamais.
+                        if (mcLive.timeLimitReached() ||
+                            (mcLive.budgetExhausted() && !anyActive)) {
+                            mcLive.stop();
+                            simFinished = true;
+                        }
+                    } else if (everHadAgents && !anyActive) {
+                        simFinished = true;
+                    }
+                }
             }
 
             if (camera) camera->applyTo(window);
@@ -458,8 +800,10 @@ int main() {
                     if (!path.empty()) io::exportScenario(path, *world, agents);
                 }
                 if (ImGui::Button("Reset Simulation (R)", ImVec2(-1.f, 30.f))) {
-                    for (auto& a : agents) a->resetToStart(*world);
-                    metrics.reset();
+                    // Reconstruit la scene complete (les agents arrives ont ete
+                    // detruits) ; repli sur resetToStart si pas de constructeur.
+                    if (currentRebuild) currentRebuild();
+                    else { for (auto& a : agents) a->resetToStart(*world); metrics.reset(); }
                 }
                 ImGui::Separator();
                 ImGui::Checkbox("Pause Generale", &isPaused);
@@ -537,79 +881,12 @@ int main() {
                 ImGui::TextDisabled("Change le mode en direct (meme geometrie).");
             }
 
-            // ---- Experience Monte-Carlo headless (test d'hypothese du rapport) ----
+            // Le banc d'essai Monte-Carlo a desormais son propre ecran dedie,
+            // accessible depuis le menu principal (visuel ou headless).
             if (ImGui::CollapsingHeader("Experience Monte-Carlo")) {
-                ImGui::TextWrapped("Compare Priorite Fixe vs P2P sur un carrefour "
-                                   "isole, densite 0.1->0.8 v/s. Bloque l'UI le temps "
-                                   "du calcul (progression en console).");
-                ImGui::SliderInt("Duree mesure (s)", &expDurationSec, 20, 180);
-                ImGui::SliderInt("Runs / point", &expRuns, 1, 5);
-                ImGui::Checkbox("Prio. Fixe", &expStratFixed);  ImGui::SameLine();
-                ImGui::Checkbox("P2P", &expStratP2P);           ImGui::SameLine();
-                ImGui::Checkbox("AIM", &expStratAim);           ImGui::SameLine();
-                ImGui::Checkbox("Peloton", &expStratPlatoon);
-
-                if (ImGui::Button("Lancer l'experience", ImVec2(-1.f, 30.f))) {
-                    sim::ExperimentConfig cfg;
-                    cfg.durationSec  = static_cast<float>(expDurationSec);
-                    cfg.runsPerPoint = expRuns;
-                    cfg.strategies.clear();
-                    if (expStratFixed)   cfg.strategies.push_back(RegulationType::FIXED_PRIORITY);
-                    if (expStratP2P)     cfg.strategies.push_back(RegulationType::P2P);
-                    if (expStratAim)     cfg.strategies.push_back(RegulationType::AIM);
-                    if (expStratPlatoon) cfg.strategies.push_back(RegulationType::VIRTUAL_PLATOON);
-                    if (!cfg.strategies.empty())
-                        expResults = sim::ExperimentRunner::run(cfg, nullptr);
-                }
-
-                if (!expResults.empty()) {
-                    if (ImGui::BeginTable("expTable", 5,
-                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-                        ImGui::TableSetupColumn("Strat");
-                        ImGui::TableSetupColumn("Dens");
-                        ImGui::TableSetupColumn("Debit");
-                        ImGui::TableSetupColumn("Delay");
-                        ImGui::TableSetupColumn("TTC");
-                        ImGui::TableHeadersRow();
-                        for (const auto& r : expResults) {
-                            ImGui::TableNextRow();
-                            ImGui::TableNextColumn(); ImGui::TextUnformatted(sim::ExperimentRunner::strategyName(r.strategy));
-                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.density);
-                            ImGui::TableNextColumn(); ImGui::Text("%.1f", r.throughputPerMin);
-                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.meanDelaySec);
-                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.minTTC);
-                        }
-                        ImGui::EndTable();
-                    }
-
-                    // Courbes par strategie : Delay vs densite + Debit vs densite.
-                    // Le croisement attendu materialise le point d'inflexion du rapport.
-                    std::vector<RegulationType> strats;
-                    for (const auto& r : expResults)
-                        if (std::find(strats.begin(), strats.end(), r.strategy) == strats.end())
-                            strats.push_back(r.strategy);
-
-                    for (RegulationType st : strats) {
-                        std::vector<float> delay, thr;
-                        for (const auto& r : expResults) if (r.strategy == st) {
-                            delay.push_back(r.meanDelaySec);
-                            thr.push_back(r.throughputPerMin);
-                        }
-                        char lab[64];
-                        std::snprintf(lab, sizeof(lab), "Delay %s", sim::ExperimentRunner::strategyName(st));
-                        ImGui::PlotLines(lab, delay.data(), static_cast<int>(delay.size()), 0,
-                                         nullptr, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
-                        std::snprintf(lab, sizeof(lab), "Debit %s", sim::ExperimentRunner::strategyName(st));
-                        ImGui::PlotLines(lab, thr.data(), static_cast<int>(thr.size()), 0,
-                                         nullptr, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
-                    }
-                    ImGui::TextDisabled("Axe X = densite croissante (0.1->0.8 v/s)");
-
-                    if (ImGui::Button("Exporter resultats CSV", ImVec2(-1.f, 26.f))) {
-                        std::string path = saveCsvDialog();
-                        if (!path.empty()) sim::ExperimentRunner::exportCsv(path, expResults);
-                    }
-                }
+                ImGui::TextWrapped("Le banc d'essai Monte-Carlo (densite x strategie, "
+                                   "visuel ou headless) est accessible depuis le MENU "
+                                   "PRINCIPAL via le bouton dedie.");
             }
 
             if (ImGui::CollapsingHeader("Palette d'Edition", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -809,11 +1086,70 @@ int main() {
             if (ImGui::Button("Retour Menu (Echap)", ImVec2(-1.f, 35.f))) currentState = AppState::MAIN_MENU;
 
             ImGui::End();
+
+            // ---- Pop-up de fin de simulation -------------------------------
+            // Ouvert une seule fois a la transition simFinished. Propose la
+            // sauvegarde des metriques (CSV/JSON), de rejouer ou de revenir.
+            if (simFinished && !endDialogOpened) {
+                ImGui::OpenPopup("Simulation terminee");
+                endDialogOpened = true;
+            }
+            ImGui::SetNextWindowPos(ImVec2(winW / 2.f, winH / 2.f), ImGuiCond_Appearing,
+                                    ImVec2(0.5f, 0.5f));
+            if (ImGui::BeginPopupModal("Simulation terminee", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                const auto& m = metrics.aggregate();
+                ImGui::Text("Simulation terminee");
+                ImGui::Separator();
+                ImGui::TextWrapped("Collecte des metriques arretee (tous arrives, "
+                                   "budget de vehicules epuise, ou limite de temps).");
+                ImGui::Spacing();
+                ImGui::Text("Vehicules arrives : %d", m.completedVehicles);
+                ImGui::Text("Temps simule      : %.1f s", m.simTime);
+                ImGui::Text("Debit             : %.1f veh/min", m.throughputPerMin);
+                ImGui::Text("Delay moyen       : %.2f s", m.meanDelaySec);
+                ImGui::Text("TTC min           : %.2f s", m.minTTC);
+                ImGui::Text("Arrets totaux     : %d", m.totalStops);
+                ImGui::Separator();
+                ImGui::TextDisabled("Sauvegarder les metriques generees :");
+
+                if (ImGui::Button("Exporter CSV", ImVec2(180.f, 32.f))) {
+                    std::string path = saveCsvDialog();
+                    if (!path.empty()) metrics.exportCsv(path);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Exporter JSON", ImVec2(180.f, 32.f))) {
+                    std::string path = saveJsonDialog();
+                    if (!path.empty()) metrics.exportJson(path);
+                }
+
+                ImGui::Spacing();
+                if (ImGui::Button("Rejouer", ImVec2(180.f, 32.f))) {
+                    ImGui::CloseCurrentPopup();
+                    if (currentRebuild) currentRebuild();   // remet simFinished a false
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Retour au menu", ImVec2(180.f, 32.f))) {
+                    ImGui::CloseCurrentPopup();
+                    currentState = AppState::MAIN_MENU;
+                }
+                ImGui::Spacing();
+                if (ImGui::Button("Continuer l'observation", ImVec2(-1.f, 26.f))) {
+                    // Ferme le pop-up sans relancer : la scene reste figee, on
+                    // peut la consulter (camera, panneau metriques) librement.
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
         }
 
         ImGui::SFML::Render(window);
         window.display();
     }
+
+    // Le thread Monte-Carlo capture des locals par reference : on l'attend avant
+    // de detruire la pile de main (sinon acces a de la memoire liberee).
+    if (mcThread.joinable()) mcThread.join();
 
     ImGui::SFML::Shutdown();
     return 0;
