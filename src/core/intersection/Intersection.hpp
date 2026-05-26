@@ -64,6 +64,10 @@ public:
     // Wave 5 : seule API publique de regulation. Decision riche pour pilotage IDM.
     core::intersection::Decision request(const core::intersection::PolicyContext& ctx) const;
 
+    // Change la strategie de regulation a la volee (recree la policy associee).
+    // Permet de comparer les modes sur la MEME geometrie sans rebatir la scene.
+    void setRegulation(RegulationType newType);
+
     int                                 getId() const;
     RegulationType                      getType() const;
     const std::vector<core::TileCoord>& getCoveredTiles() const;

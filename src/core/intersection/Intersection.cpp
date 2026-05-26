@@ -3,7 +3,9 @@
 
 #include <algorithm>
 
+#include "core/intersection/FixedPriorityPolicy.hpp"
 #include "core/intersection/IIntersectionPolicy.hpp"
+#include "core/intersection/P2PPolicy.hpp"
 #include "core/intersection/PriorityRightPolicy.hpp"
 #include "core/intersection/RoundaboutPolicy.hpp"
 #include "core/intersection/StopPolicy.hpp"
@@ -20,6 +22,8 @@ makePolicyFor(RegulationType type) {
         case RegulationType::STOP:           return std::make_unique<StopPolicy>();
         case RegulationType::ROUNDABOUT:     return std::make_unique<RoundaboutPolicy>();
         case RegulationType::YIELD:          return std::make_unique<PriorityRightPolicy>(); // approximation
+        case RegulationType::FIXED_PRIORITY: return std::make_unique<FixedPriorityPolicy>();
+        case RegulationType::P2P:            return std::make_unique<P2PPolicy>();
         default:                             return std::make_unique<PriorityRightPolicy>();
     }
 }
@@ -102,6 +106,15 @@ Intersection::request(const core::intersection::PolicyContext& ctx) const {
     core::intersection::Decision d;
     d.canEnter = true;
     return d;
+}
+
+void Intersection::setRegulation(RegulationType newType) {
+    if (newType == type) return;
+    type   = newType;
+    policy_ = makePolicyFor(newType);
+    // Repart sur une phase de feu propre (sans effet pour les autres modes).
+    lightTimer   = 0.f;
+    currentPhase = 0;
 }
 
 bool Intersection::coversTile(int gridX, int gridY) const {

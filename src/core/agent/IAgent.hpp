@@ -16,6 +16,7 @@
 
 #include "core/agent/AgentDebugSnapshot.hpp"
 #include "core/agent/BlockReason.hpp"
+#include "core/agent/TurnIntent.hpp"
 #include "core/Color.hpp"
 #include "core/math/TileCoord.hpp"
 #include "core/math/Vec2.hpp"
@@ -62,4 +63,16 @@ public:
 
     // Diagnostic : pourquoi l'agent freine / est arrete.
     virtual core::agent::BlockReason getBlockReason() const = 0;
+
+    // --- Coordination decentralisee (P2P / metriques) ---
+    // Identifiant unique stable (VIN) : sert de bris d'egalite ultime dans la
+    // hierarchie de dominance VanMiddlesworth (regle 4) et de cle de suivi
+    // dans le collecteur de metriques. Non-pur : defaut = -1 (non identifie).
+    virtual int getVehicleId() const { return -1; }
+
+    // Intention de manoeuvre a la prochaine intersection (regle 3 : tout droit
+    // domine un virage). Non-pur : defaut = UNKNOWN.
+    virtual core::agent::TurnIntent getTurnIntent() const {
+        return core::agent::TurnIntent::UNKNOWN;
+    }
 };

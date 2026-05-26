@@ -7,6 +7,9 @@
 #include <memory>
 #include <iostream>
 #include <string>
+#include <cfloat>
+#include <cstddef>
+#include <cstdio>
 
 #include "portable-file-dialogs.h"
 #include "core/agent/BlockReason.hpp"
@@ -14,6 +17,7 @@
 #include "core/agent/Personality.hpp"
 #include "core/agent/Truck.hpp"
 #include "core/agent/Vehicle.hpp"
+#include "core/metrics/MetricsCollector.hpp"
 #include "core/world/World.hpp"
 #include "render/Camera.hpp"
 #include "core/pathfinding/AStarPlanner.hpp"
@@ -30,6 +34,8 @@ enum class BuildTool {
     INTERSECTION_TRAFFIC_LIGHT,
     INTERSECTION_STOP,
     INTERSECTION_ROUNDABOUT,
+    INTERSECTION_FIXED_PRIORITY,   // Strategie "recherche" : priorite fixe par axe
+    INTERSECTION_P2P,              // Strategie "recherche" : negociation P2P
     ERASE
 };
 
@@ -44,6 +50,15 @@ std::string saveFileDialog() {
     auto f = pfd::save_file("Sauvegarder la simulation", "", { "Fichiers Texte (*.txt)", "*.txt" });
     std::string path = f.result();
     if (!path.empty() && path.find(".txt") == std::string::npos) path += ".txt";
+    return path;
+}
+
+std::string saveCsvDialog() {
+    if (!pfd::settings::available()) return "";
+    auto f = pfd::save_file("Exporter les metriques (CSV)", "metriques.csv",
+                            { "Fichiers CSV (*.csv)", "*.csv" });
+    std::string path = f.result();
+    if (!path.empty() && path.find(".csv") == std::string::npos) path += ".csv";
     return path;
 }
 
@@ -74,6 +89,9 @@ int main() {
     std::unique_ptr<World> world;
     std::unique_ptr<Camera> camera;
     std::vector<std::unique_ptr<IAgent>> agents;
+
+    // Banc d'essai quantitatif : collecte les metriques de recherche en direct.
+    core::metrics::MetricsCollector metrics;
 
     sf::Clock clock;
     sf::Clock deltaClock;
@@ -141,6 +159,7 @@ int main() {
         scene::spawnDefaultAgents(agents, *world);
 
         renderer.invalidateMapCache();
+        metrics.reset();
         currentState = AppState::SIMULATION;
         clock.restart();
     };
@@ -177,7 +196,9 @@ int main() {
                             case sf::Keyboard::Num4: currentTool = BuildTool::INTERSECTION_TRAFFIC_LIGHT; break;
                             case sf::Keyboard::Num5: currentTool = BuildTool::INTERSECTION_STOP; break;
                             case sf::Keyboard::Num6: currentTool = BuildTool::INTERSECTION_ROUNDABOUT; break;
-                            case sf::Keyboard::Num7:
+                            case sf::Keyboard::Num7: currentTool = BuildTool::INTERSECTION_FIXED_PRIORITY; break;
+                            case sf::Keyboard::Num8: currentTool = BuildTool::INTERSECTION_P2P; break;
+                            case sf::Keyboard::Num9:
                             case sf::Keyboard::Delete: currentTool = BuildTool::ERASE; break;
                             default: break;
                         }
@@ -224,7 +245,9 @@ int main() {
                             }
                             else if (currentTool == BuildTool::INTERSECTION_PRIORITY ||
                                      currentTool == BuildTool::INTERSECTION_TRAFFIC_LIGHT ||
-                                     currentTool == BuildTool::INTERSECTION_STOP) {
+                                     currentTool == BuildTool::INTERSECTION_STOP ||
+                                     currentTool == BuildTool::INTERSECTION_FIXED_PRIORITY ||
+                                     currentTool == BuildTool::INTERSECTION_P2P) {
                                 if (gX >= 0 && gX < world->getGridWidth() - 1 && gY >= 0 && gY < world->getGridHeight() - 1) {
                                     bool hasRoad = false;
                                     for(int i=0;i<2;++i)
@@ -234,8 +257,10 @@ int main() {
                                         const int newId = world->getIntersections().size() + 1;
                                         RegulationType reg = RegulationType::PRIORITY_RIGHT;
                                         switch (currentTool) {
-                                            case BuildTool::INTERSECTION_TRAFFIC_LIGHT: reg = RegulationType::TRAFFIC_LIGHT; break;
-                                            case BuildTool::INTERSECTION_STOP:          reg = RegulationType::STOP; break;
+                                            case BuildTool::INTERSECTION_TRAFFIC_LIGHT:  reg = RegulationType::TRAFFIC_LIGHT;  break;
+                                            case BuildTool::INTERSECTION_STOP:           reg = RegulationType::STOP;           break;
+                                            case BuildTool::INTERSECTION_FIXED_PRIORITY: reg = RegulationType::FIXED_PRIORITY; break;
+                                            case BuildTool::INTERSECTION_P2P:            reg = RegulationType::P2P;            break;
                                             default: break;
                                         }
                                         scene::buildCrossroad(*world, gX + 1, gY + 1, newId, reg);
@@ -306,6 +331,7 @@ int main() {
                     camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
                     camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
                     renderer.invalidateMapCache();
+                    metrics.reset();
                     currentState = AppState::SIMULATION;
                     clock.restart();
                 }
@@ -316,6 +342,7 @@ int main() {
                     camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f, world->getWorldPixelHeight() / 2.f, (float)winW - PANEL_WIDTH, (float)winH);
                     camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
                     renderer.invalidateMapCache();
+                    metrics.reset();
                     currentState = AppState::SIMULATION;
                     clock.restart();
                 }
@@ -337,6 +364,7 @@ int main() {
                     world->updateIntersections(FIXED_DT);
                     for (auto& agent : agents) agent->computeDecision(agents, *world);
                     for (auto& agent : agents) agent->integrate(FIXED_DT);
+                    metrics.sample(agents, FIXED_DT);   // banc d'essai : echantillonne l'etat a jour
                     simAccumulator -= FIXED_DT;
                     ++steps;
                 }
@@ -380,6 +408,10 @@ int main() {
                             case BuildTool::INTERSECTION_TRAFFIC_LIGHT:
                             case BuildTool::INTERSECTION_STOP:
                                 gw = 2; gh = 2; col = core::Color{255, 210, 40, 70}; break;
+                            case BuildTool::INTERSECTION_FIXED_PRIORITY:
+                                gw = 2; gh = 2; col = core::Color{40, 120, 255, 70}; break;
+                            case BuildTool::INTERSECTION_P2P:
+                                gw = 2; gh = 2; col = core::Color{60, 220, 180, 70}; break;
                             case BuildTool::INTERSECTION_ROUNDABOUT: {
                                 int side = roundaboutSide;
                                 if (side < 2)      side = 2;
@@ -410,10 +442,81 @@ int main() {
                 }
                 if (ImGui::Button("Reset Simulation (R)", ImVec2(-1.f, 30.f))) {
                     for (auto& a : agents) a->resetToStart(*world);
+                    metrics.reset();
                 }
                 ImGui::Separator();
                 ImGui::Checkbox("Pause Generale", &isPaused);
                 ImGui::SliderFloat("Vitesse Sim", &simSpeedFactor, 0.2f, 3.0f, "%.1fx");
+            }
+
+            // ---- Banc d'essai quantitatif (metriques de recherche) ----
+            if (ImGui::CollapsingHeader("Metriques (recherche)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                const auto& m = metrics.aggregate();
+                ImGui::Text("Temps simule : %.1f s", m.simTime);
+                ImGui::Text("Actifs : %d   |   Arrives : %d", m.activeVehicles, m.completedVehicles);
+                ImGui::Separator();
+                ImGui::Text("Debit       : %.1f veh/min", m.throughputPerMin);
+                ImGui::Text("Delay moyen : %.2f s", m.meanDelaySec);
+                ImGui::Text("Vitesse moy.: %.0f px/s", m.meanSpeed);
+                ImGui::Text("Jerk moyen  : %.0f", m.meanJerkCompleted);
+                const ImVec4 ttcCol = (m.minTTC < core::metrics::kCriticalTTC)
+                    ? ImVec4(1.f, 0.3f, 0.3f, 1.f) : ImVec4(0.5f, 1.f, 0.5f, 1.f);
+                ImGui::TextColored(ttcCol, "TTC min     : %.2f s", m.minTTC);
+                ImGui::Text("Incidents TTC<%.1fs : %d", core::metrics::kCriticalTTC, m.ttcViolations);
+                ImGui::Text("Arrets totaux : %d", m.totalStops);
+
+                auto plot = [](const char* label, const std::vector<float>& s, const char* fmt) {
+                    if (s.empty()) { ImGui::TextDisabled("%s : (collecte...)", label); return; }
+                    char overlay[64];
+                    std::snprintf(overlay, sizeof(overlay), fmt, s.back());
+                    ImGui::PlotLines(label, s.data(), static_cast<int>(s.size()), 0,
+                                     overlay, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
+                };
+                ImGui::Spacing();
+                plot("Debit",   metrics.seriesThroughput(), "%.1f/min");
+                plot("Delay",   metrics.seriesDelay(),      "%.1f s");
+                plot("Vitesse", metrics.seriesSpeed(),      "%.0f");
+                plot("TTC min", metrics.seriesMinTTC(),     "%.1f s");
+
+                ImGui::Spacing();
+                if (ImGui::Button("Exporter CSV", ImVec2(-1.f, 28.f))) {
+                    std::string path = saveCsvDialog();
+                    if (!path.empty()) metrics.exportCsv(path);
+                }
+                if (ImGui::Button("Reset metriques", ImVec2(-1.f, 24.f))) metrics.reset();
+            }
+
+            // ---- Choix / comparaison du mode de regulation par carrefour ----
+            if (world && ImGui::CollapsingHeader("Carrefours - Mode")) {
+                static const RegulationType regTypes[] = {
+                    RegulationType::PRIORITY_RIGHT, RegulationType::STOP,
+                    RegulationType::YIELD,          RegulationType::TRAFFIC_LIGHT,
+                    RegulationType::FIXED_PRIORITY, RegulationType::P2P
+                };
+                static const char* regNames[] = {
+                    "Priorite a droite", "STOP", "Cedez", "Feux",
+                    "Priorite fixe", "P2P (VANET)"
+                };
+                const auto& inters = world->getIntersections();
+                for (std::size_t i = 0; i < inters.size(); ++i) {
+                    const Intersection& it = inters[i];
+                    ImGui::PushID(static_cast<int>(i));
+                    const std::string lbl = "Carr #" + std::to_string(it.getId());
+                    // Rond-point (mini 2x2 ou anneau) : geometrie non convertible.
+                    const bool isRoundabout = (it.getType() == RegulationType::ROUNDABOUT);
+                    if (isRoundabout) {
+                        ImGui::Text("%s : Rond-point", lbl.c_str());
+                    } else {
+                        int cur = 0;
+                        for (int k = 0; k < IM_ARRAYSIZE(regTypes); ++k)
+                            if (regTypes[k] == it.getType()) { cur = k; break; }
+                        if (ImGui::Combo(lbl.c_str(), &cur, regNames, IM_ARRAYSIZE(regNames))) {
+                            world->setIntersectionRegulation(i, regTypes[cur]);
+                        }
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::TextDisabled("Change le mode en direct (meme geometrie).");
             }
 
             if (ImGui::CollapsingHeader("Palette d'Edition", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -435,7 +538,14 @@ int main() {
                         if (roundaboutSide % 2 != 0) ++roundaboutSide;   // toujours PAIR
                         ImGui::TextDisabled("Cote PAIR (2,4,6,8). Coin = tile cliquee.");
                     }
-                    if (ImGui::RadioButton("Gomme / Effacer       [7]", currentTool == BuildTool::ERASE)) currentTool = BuildTool::ERASE;
+
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.4f, 0.85f, 1.f, 1.f), "Strategies recherche (SMA) :");
+                    if (ImGui::RadioButton("Carrefour Priorite Fixe [7]", currentTool == BuildTool::INTERSECTION_FIXED_PRIORITY)) currentTool = BuildTool::INTERSECTION_FIXED_PRIORITY;
+                    if (ImGui::RadioButton("Carrefour P2P (VANET)   [8]", currentTool == BuildTool::INTERSECTION_P2P)) currentTool = BuildTool::INTERSECTION_P2P;
+                    ImGui::Spacing();
+
+                    if (ImGui::RadioButton("Gomme / Effacer       [9]", currentTool == BuildTool::ERASE)) currentTool = BuildTool::ERASE;
 
                     ImGui::Separator();
                     ImGui::TextDisabled("Glisser = tracer (direction auto)");

@@ -41,7 +41,13 @@ Vehicle::Vehicle(float startX, float startY, float tSize) :
     rng_(static_cast<std::uint64_t>(
         static_cast<std::uint64_t>(startX * 1000.f) * 0x9E3779B97F4A7C15ULL ^
         static_cast<std::uint64_t>(startY * 1000.f) * 0xBF58476D1CE4E5B9ULL))
-{}
+{
+    // VIN deterministe : l'ordre de construction des agents est fixe
+    // (cf. SceneBuilder), donc reproductible run-to-run. N'influence aucune
+    // physique sauf le bris d'egalite ultime du protocole P2P.
+    static int s_nextVehicleId = 0;
+    vehicleId_ = s_nextVehicleId++;
+}
 
 // -----------------------------------------------------------------
 // Helpers
@@ -685,6 +691,20 @@ void Vehicle::resetToStart(const World& world) {
 float Vehicle::getRemainingDistance() const {
     if (!currentLane || hasFinishedPath) return 0.f;
     return std::max(0.f, currentLane->getLength() - s);
+}
+
+core::agent::TurnIntent Vehicle::getTurnIntent() const {
+    // Classe la manoeuvre imminente en comparant le cap actuel au cap ~3 tiles
+    // plus loin sur la trajectoire (couvre l'arc d'un virage de carrefour).
+    // |delta| faible -> tout droit ; sinon -> virage. Pas de distinction
+    // gauche/droite : la regle de dominance P2P ne la requiert pas.
+    if (!currentLane || hasFinishedPath) return core::agent::TurnIntent::UNKNOWN;
+    const float here  = currentLane->getHeadingAt(s);
+    const float ahead = currentLane->getHeadingAt(
+        std::min(s + tileSize * 3.f, currentLane->getLength()));
+    const float delta = std::abs(core::math::wrapDeg180(ahead - here));
+    return (delta < 30.f) ? core::agent::TurnIntent::STRAIGHT
+                          : core::agent::TurnIntent::TURNING;
 }
 
 // =================================================================

@@ -134,6 +134,10 @@ void World::updateIntersections(float dt) {
     for (auto& inter : intersections) inter.update(dt);
 }
 
+void World::setIntersectionRegulation(std::size_t index, RegulationType type) {
+    if (index < intersections.size()) intersections[index].setRegulation(type);
+}
+
 void World::refreshRoundaboutApproaches() {
     auto isRoad = [&](int x, int y) {
         const Tile& t = getTile(x, y);

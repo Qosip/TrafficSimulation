@@ -269,6 +269,48 @@ void SfmlRenderer::drawIntersections(const World& world) {
                 target_.draw(tri);
                 break;
             }
+
+            case RegulationType::FIXED_PRIORITY: {
+                // Bande bleue le long de l'axe PRINCIPAL (route prioritaire),
+                // + losange jaune central (panneau "priorite").
+                const bool majorH = inter.isStopMajorAxisHorizontal();
+                sf::RectangleShape band(majorH ? sf::Vector2f(ts * 1.8f, 5.f)
+                                               : sf::Vector2f(5.f, ts * 1.8f));
+                band.setOrigin(band.getSize().x / 2.f, band.getSize().y / 2.f);
+                band.setPosition(center);
+                band.setFillColor(sf::Color(40, 120, 255, 200));
+                target_.draw(band);
+
+                sf::CircleShape diamond(9.f, 4);
+                diamond.setOrigin(9.f, 9.f);
+                diamond.setPosition(center);
+                diamond.setFillColor(sf::Color(255, 204, 0));
+                diamond.setOutlineColor(sf::Color::Black);
+                diamond.setOutlineThickness(1.f);
+                diamond.setRotation(45.f);
+                target_.draw(diamond);
+                break;
+            }
+
+            case RegulationType::P2P: {
+                // Antennes V2V : arcs concentriques evoquant le broadcast VANET.
+                for (int k = 1; k <= 3; ++k) {
+                    sf::CircleShape ring(4.f + k * 5.f);
+                    ring.setOrigin(ring.getRadius(), ring.getRadius());
+                    ring.setPosition(center);
+                    ring.setFillColor(sf::Color(0, 0, 0, 0));
+                    ring.setOutlineColor(sf::Color(60, 220, 180,
+                                                   static_cast<sf::Uint8>(220 - k * 40)));
+                    ring.setOutlineThickness(2.f);
+                    target_.draw(ring);
+                }
+                sf::CircleShape dot(3.f);
+                dot.setOrigin(3.f, 3.f);
+                dot.setPosition(center);
+                dot.setFillColor(sf::Color(60, 220, 180));
+                target_.draw(dot);
+                break;
+            }
         }
     }
 }

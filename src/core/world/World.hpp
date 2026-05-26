@@ -3,6 +3,7 @@
 // Etape 4 : aucune dependance SFML restante.
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 #include "core/intersection/Intersection.hpp"
@@ -57,6 +58,11 @@ public:
     void refreshRoundaboutApproaches();
 
     const std::vector<Intersection>& getIntersections() const { return intersections; }
+
+    // Change la strategie de regulation du carrefour d'indice donne (no-op si
+    // hors borne). Sert a comparer les modes en direct sur la meme scene.
+    void setIntersectionRegulation(std::size_t index, RegulationType type);
+
     const Intersection* getIntersectionAt(float worldX, float worldY) const;
     const Intersection* getIntersectionNear(float worldX, float worldY, float radius) const;
     Approach::Direction getApproachDirection(float headingDeg) const;

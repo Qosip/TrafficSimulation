@@ -28,7 +28,9 @@ void buildCrossroad(World& w, int cx, int cy, int id, RegulationType regType) {
     // STOP 2 voies (jamais all-way) : l'axe le plus RAPIDE est la route
     // PRINCIPALE prioritaire ; l'autre porte le panneau STOP. Egalite de
     // vitesse -> axe horizontal prioritaire par convention.
-    if (regType == RegulationType::STOP) {
+    // STOP et PRIORITE FIXE partagent la notion d'axe PRINCIPAL : l'axe le
+    // plus rapide est prioritaire ; egalite -> horizontal par convention.
+    if (regType == RegulationType::STOP || regType == RegulationType::FIXED_PRIORITY) {
         const float hE = getRoadSpeedLimit(w.getTile(cx + 1, cy - 1).roadType);
         const float hW = getRoadSpeedLimit(w.getTile(cx - 2, cy).roadType);
         const float vN = getRoadSpeedLimit(w.getTile(cx, cy - 2).roadType);

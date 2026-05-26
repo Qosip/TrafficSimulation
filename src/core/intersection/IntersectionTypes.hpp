@@ -12,6 +12,11 @@ enum class RegulationType {
     YIELD,        // Prevu
     TRAFFIC_LIGHT,
     ROUNDABOUT,   // Prevu
+    // --- Strategies de coordination "recherche" (etat de l'art SMA) ---
+    // NB : ajoutees EN FIN d'enum pour preserver la compatibilite des
+    // scenarios serialises (RegulationType est ecrit en int dans les .txt).
+    FIXED_PRIORITY,  // Priorite fixe par axe (route principale vs secondaire)
+    P2P,             // Negociation pair-a-pair decentralisee (VanMiddlesworth)
 };
 
 struct Approach {

@@ -84,6 +84,11 @@ protected:
     core::TileCoord startTile;
     core::TileCoord goalTile;
 
+    // VIN stable assigne a la construction (compteur global deterministe :
+    // l'ordre de spawn est fixe -> reproductible). Sert au bris d'egalite P2P
+    // et de cle de suivi pour les metriques.
+    int vehicleId_ = -1;
+
     void rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
                              const World* world);
     void applyPersonalityToIdm();
@@ -136,6 +141,9 @@ public:
     bool  isSelected() const          override { return isSelectedFlag; }
     float getRemainingDistance() const override;
     core::agent::BlockReason getBlockReason() const override { return currentBlockReason; }
+
+    int getVehicleId() const override { return vehicleId_; }
+    core::agent::TurnIntent getTurnIntent() const override;
 
     // Permet a Car/Truck d'injecter leurs parametres IDM specifiques.
     void setIdmParams(const core::behavior::IdmParams& p) {
