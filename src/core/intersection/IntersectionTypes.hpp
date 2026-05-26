@@ -17,6 +17,7 @@ enum class RegulationType {
     // scenarios serialises (RegulationType est ecrit en int dans les .txt).
     FIXED_PRIORITY,  // Priorite fixe par axe (route principale vs secondaire)
     P2P,             // Negociation pair-a-pair decentralisee (VanMiddlesworth)
+    AIM,             // Gestion centralisee par reservation (Dresner & Stone)
 };
 
 struct Approach {

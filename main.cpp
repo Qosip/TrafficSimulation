@@ -18,6 +18,7 @@
 #include "core/agent/Personality.hpp"
 #include "core/agent/Truck.hpp"
 #include "core/agent/Vehicle.hpp"
+#include "core/math/Rng.hpp"
 #include "core/metrics/MetricsCollector.hpp"
 #include "core/world/World.hpp"
 #include "sim/ExperimentRunner.hpp"
@@ -97,8 +98,14 @@ int main() {
 
     // Resultats de la derniere experience Monte-Carlo headless (Fixed vs P2P...).
     std::vector<sim::ResultRow> expResults;
-    int expDurationSec = 60;
-    int expRuns        = 1;
+    int  expDurationSec = 60;
+    int  expRuns        = 1;
+    bool expStratFixed  = true;
+    bool expStratP2P    = true;
+    bool expStratAim    = false;
+
+    // RNG d'UI (heterogeneite gaussienne appliquee a la flotte a la demande).
+    core::Rng uiRng(0xA11CEULL);
 
     sf::Clock clock;
     sf::Clock deltaClock;
@@ -500,11 +507,12 @@ int main() {
                 static const RegulationType regTypes[] = {
                     RegulationType::PRIORITY_RIGHT, RegulationType::STOP,
                     RegulationType::YIELD,          RegulationType::TRAFFIC_LIGHT,
-                    RegulationType::FIXED_PRIORITY, RegulationType::P2P
+                    RegulationType::FIXED_PRIORITY, RegulationType::P2P,
+                    RegulationType::AIM
                 };
                 static const char* regNames[] = {
                     "Priorite a droite", "STOP", "Cedez", "Feux",
-                    "Priorite fixe", "P2P (VANET)"
+                    "Priorite fixe", "P2P (VANET)", "AIM (reservation)"
                 };
                 const auto& inters = world->getIntersections();
                 for (std::size_t i = 0; i < inters.size(); ++i) {
@@ -535,12 +543,20 @@ int main() {
                                    "du calcul (progression en console).");
                 ImGui::SliderInt("Duree mesure (s)", &expDurationSec, 20, 180);
                 ImGui::SliderInt("Runs / point", &expRuns, 1, 5);
+                ImGui::Checkbox("Prio. Fixe", &expStratFixed); ImGui::SameLine();
+                ImGui::Checkbox("P2P", &expStratP2P);          ImGui::SameLine();
+                ImGui::Checkbox("AIM", &expStratAim);
 
-                if (ImGui::Button("Lancer (Fixed vs P2P)", ImVec2(-1.f, 30.f))) {
+                if (ImGui::Button("Lancer l'experience", ImVec2(-1.f, 30.f))) {
                     sim::ExperimentConfig cfg;
                     cfg.durationSec  = static_cast<float>(expDurationSec);
                     cfg.runsPerPoint = expRuns;
-                    expResults = sim::ExperimentRunner::run(cfg, nullptr);
+                    cfg.strategies.clear();
+                    if (expStratFixed) cfg.strategies.push_back(RegulationType::FIXED_PRIORITY);
+                    if (expStratP2P)   cfg.strategies.push_back(RegulationType::P2P);
+                    if (expStratAim)   cfg.strategies.push_back(RegulationType::AIM);
+                    if (!cfg.strategies.empty())
+                        expResults = sim::ExperimentRunner::run(cfg, nullptr);
                 }
 
                 if (!expResults.empty()) {
@@ -660,6 +676,11 @@ int main() {
             if (ImGui::CollapsingHeader("Flotte de Vehicules", ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (ImGui::Button("Cacher tous les traces", ImVec2(-1.f, 25.f))) {
                     for (auto& a : agents) a->setSelected(false);
+                }
+                if (ImGui::Button("Conducteurs heterogenes (gaussien)", ImVec2(-1.f, 25.f))) {
+                    for (auto& a : agents)
+                        if (auto* veh = dynamic_cast<Vehicle*>(a.get()))
+                            veh->applyGaussianHeterogeneity(uiRng, 0.18f);
                 }
                 ImGui::Separator();
 

@@ -323,6 +323,31 @@ void SfmlRenderer::drawIntersections(const World& world) {
                 target_.draw(dot);
                 break;
             }
+
+            case RegulationType::AIM: {
+                // Gestionnaire centralise : grille 2x2 de tuiles de reservation.
+                const float half = 9.f;
+                sf::RectangleShape box(sf::Vector2f(half * 2.f, half * 2.f));
+                box.setOrigin(half, half);
+                box.setPosition(center);
+                box.setFillColor(sf::Color(150, 60, 220, 180));
+                box.setOutlineColor(sf::Color::White);
+                box.setOutlineThickness(1.f);
+                target_.draw(box);
+
+                sf::RectangleShape vbar(sf::Vector2f(1.5f, half * 2.f));
+                vbar.setOrigin(0.75f, half);
+                vbar.setPosition(center);
+                vbar.setFillColor(sf::Color(255, 255, 255, 200));
+                target_.draw(vbar);
+
+                sf::RectangleShape hbar(sf::Vector2f(half * 2.f, 1.5f));
+                hbar.setOrigin(half, 0.75f);
+                hbar.setPosition(center);
+                hbar.setFillColor(sf::Color(255, 255, 255, 200));
+                target_.draw(hbar);
+                break;
+            }
         }
     }
 }

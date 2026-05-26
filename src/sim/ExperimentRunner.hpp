@@ -28,6 +28,8 @@ struct ExperimentConfig {
     unsigned baseSeed      = 1337u;
     int      gridSize      = 31;     // cote de la grille (impair -> centre net)
     int      maxAgents     = 60;     // garde-fou anti-explosion (et reactivite UI)
+    bool     stochasticDrivers = true;  // heterogeneite gaussienne des conducteurs
+    float    driverSigma   = 0.15f;  // ecart-type du bruit sur T / aMax / vitesse
 };
 
 // Une ligne de resultat agregee par point (strategie, densite).

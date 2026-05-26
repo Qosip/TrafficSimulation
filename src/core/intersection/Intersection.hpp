@@ -32,6 +32,10 @@ private:
     float greenDuration  = 5.f;
     float orangeDuration = 1.5f;
 
+    // Horloge locale (s) : avance a chaque update(dt). Utilisee par la policy
+    // AIM pour raisonner en fenetres de reservation temporelles absolues.
+    float clock_ = 0.f;
+
     // STOP : axe PRINCIPAL (prioritaire). true = horizontal (E-O) prioritaire,
     // l'axe vertical (N-S) porte le panneau STOP et cede. C'est un STOP 2 voies,
     // pas un all-way : la route principale ne s'arrete jamais.
@@ -67,6 +71,9 @@ public:
     // Change la strategie de regulation a la volee (recree la policy associee).
     // Permet de comparer les modes sur la MEME geometrie sans rebatir la scene.
     void setRegulation(RegulationType newType);
+
+    // Temps local ecoule (s). Avance avec update(dt).
+    float                               now() const { return clock_; }
 
     int                                 getId() const;
     RegulationType                      getType() const;

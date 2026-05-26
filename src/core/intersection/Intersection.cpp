@@ -3,6 +3,7 @@
 
 #include <algorithm>
 
+#include "core/intersection/AimPolicy.hpp"
 #include "core/intersection/FixedPriorityPolicy.hpp"
 #include "core/intersection/IIntersectionPolicy.hpp"
 #include "core/intersection/P2PPolicy.hpp"
@@ -24,6 +25,7 @@ makePolicyFor(RegulationType type) {
         case RegulationType::YIELD:          return std::make_unique<PriorityRightPolicy>(); // approximation
         case RegulationType::FIXED_PRIORITY: return std::make_unique<FixedPriorityPolicy>();
         case RegulationType::P2P:            return std::make_unique<P2PPolicy>();
+        case RegulationType::AIM:            return std::make_unique<AimPolicy>();
         default:                             return std::make_unique<PriorityRightPolicy>();
     }
 }
@@ -68,6 +70,7 @@ void Intersection::addApproach(const Approach& approach) { approaches.push_back(
 void Intersection::clearApproaches() { approaches.clear(); }
 
 void Intersection::update(float dt) {
+    clock_ += dt;
     if (type == RegulationType::TRAFFIC_LIGHT) updateTrafficLight(dt);
 }
 

@@ -125,6 +125,8 @@ ResultRow ExperimentRunner::runOne(RegulationType strat, float density,
         if (rng.bernoulli(0.15f)) v = std::make_unique<Truck>(spawn.x, spawn.y);
         else                      v = std::make_unique<Car>(spawn.x, spawn.y);
         v->setPath(path, &world);
+        // Heterogeneite des conducteurs (methode de Monte-Carlo du rapport).
+        if (cfg.stochasticDrivers) v->applyGaussianHeterogeneity(rng, cfg.driverSigma);
         agents.push_back(std::move(v));
     };
 

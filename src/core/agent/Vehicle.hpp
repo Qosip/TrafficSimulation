@@ -160,6 +160,11 @@ public:
         applyPersonalityToIdm();
     }
 
+    // Heterogeneite gaussienne (robustesse Monte-Carlo du rapport) : bruite le
+    // temps de reaction T, l'envie d'accelerer et la conformite a la limite
+    // autour de leur valeur courante (multiplicateur ~ N(1, sigma)).
+    void applyGaussianHeterogeneity(core::Rng& rng, float sigma);
+
     // Etat panne (UI).
     bool  brokenDown() const { return isBroken; }
     float repairTimeRemaining() const { return breakdownTimer; }

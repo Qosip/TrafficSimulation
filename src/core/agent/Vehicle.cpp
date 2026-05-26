@@ -725,6 +725,14 @@ void Vehicle::applyPersonalityToIdm() {
     idm.setParams(p);
 }
 
+void Vehicle::applyGaussianHeterogeneity(core::Rng& rng, float sigma) {
+    personality_.reactionTimeFactor    *= rng.normal(1.f, sigma);
+    personality_.accelEagernessFactor  *= rng.normal(1.f, sigma);
+    personality_.speedComplianceFactor *= rng.normal(1.f, sigma);
+    personality_.clamp();
+    applyPersonalityToIdm();
+}
+
 void Vehicle::forceBreakdown(float seconds) {
     isBroken       = true;
     breakdownTimer = std::max(0.5f, seconds);
