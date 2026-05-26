@@ -18,6 +18,7 @@ enum class BlockReason {
     INTERSECTION_YIELD,   // Gap acceptance refuse (priorite a droite / fixe)
     INTERSECTION_STOP,    // Arret obligatoire panneau STOP
     NEGOTIATING,          // P2P : Claim domine, cede le passage (VanMiddlesworth)
+    PLATOONING,           // Peloton virtuel : suit un meneur projete (zipping)
     BREAKDOWN,            // En panne (timer)
     OVERTAKING,           // En manoeuvre de depassement
 };
@@ -34,6 +35,7 @@ inline const char* toString(BlockReason r) {
         case BlockReason::INTERSECTION_YIELD: return "Cede priorite";
         case BlockReason::INTERSECTION_STOP:  return "Marque l'arret (STOP)";
         case BlockReason::NEGOTIATING:        return "Negocie (P2P)";
+        case BlockReason::PLATOONING:         return "Peloton virtuel";
         case BlockReason::BREAKDOWN:          return "En panne";
         case BlockReason::OVERTAKING:         return "Depassement en cours";
     }

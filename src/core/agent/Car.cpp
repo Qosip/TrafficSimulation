@@ -12,11 +12,13 @@ Car::Car(float startX, float startY) : Vehicle(startX, startY, 50.f) {
     setPersonality(core::agent::profiles::normalDriver());
 
     // Profil IDM voiture : reactive, time headway court, decel confortable elevee.
+    // T pilote la distance de declenchement du freinage (terme v*T) : plus court
+    // => on freine PLUS TARD ; bComf eleve => freinage PLUS FRANC a l'approche.
     core::behavior::IdmParams p;
-    p.T     = 1.2f;
+    p.T     = 1.0f;
     p.s0    = 5.f;
     p.aMax  = maxAcceleration;
-    p.bComf = 80.f;
+    p.bComf = 120.f;
     p.delta = 4.f;
     setIdmParams(p);   // applique automatiquement la personnalite
 }

@@ -7,6 +7,7 @@
 #include "core/intersection/FixedPriorityPolicy.hpp"
 #include "core/intersection/IIntersectionPolicy.hpp"
 #include "core/intersection/P2PPolicy.hpp"
+#include "core/intersection/PlatooningPolicy.hpp"
 #include "core/intersection/PriorityRightPolicy.hpp"
 #include "core/intersection/RoundaboutPolicy.hpp"
 #include "core/intersection/StopPolicy.hpp"
@@ -26,6 +27,7 @@ makePolicyFor(RegulationType type) {
         case RegulationType::FIXED_PRIORITY: return std::make_unique<FixedPriorityPolicy>();
         case RegulationType::P2P:            return std::make_unique<P2PPolicy>();
         case RegulationType::AIM:            return std::make_unique<AimPolicy>();
+        case RegulationType::VIRTUAL_PLATOON:return std::make_unique<PlatooningPolicy>();
         default:                             return std::make_unique<PriorityRightPolicy>();
     }
 }

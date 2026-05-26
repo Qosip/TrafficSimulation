@@ -84,6 +84,8 @@ const char* ExperimentRunner::strategyName(RegulationType t) {
         case RegulationType::ROUNDABOUT:     return "Roundabout";
         case RegulationType::FIXED_PRIORITY: return "FixedPriority";
         case RegulationType::P2P:            return "P2P";
+        case RegulationType::AIM:            return "AIM";
+        case RegulationType::VIRTUAL_PLATOON:return "VirtualPlatoon";
     }
     return "?";
 }
@@ -219,6 +221,8 @@ std::vector<ResultRow> ExperimentRunner::run(const ExperimentConfig& cfg,
                       << " densite=" << density
                       << " -> debit=" << acc.throughputPerMin
                       << " delay=" << acc.meanDelaySec
+                      << " incTTC=" << acc.ttcViolations
+                      << " stops=" << acc.totalStops
                       << " minTTC=" << acc.minTTC << "\n";
         }
     }

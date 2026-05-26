@@ -11,11 +11,13 @@ Truck::Truck(float startX, float startY) : Vehicle(startX, startY) {
     setPersonality(core::agent::profiles::truckDriver());
 
     // Profil IDM camion : prudent, time headway plus long, decel limitee.
+    // Freinage un peu plus tardif/franc qu'avant (T reduit, bComf releve), tout
+    // en restant plus prudent qu'une voiture (masse oblige).
     core::behavior::IdmParams p;
-    p.T     = 2.0f;
+    p.T     = 1.7f;
     p.s0    = 6.f;
     p.aMax  = maxAcceleration;
-    p.bComf = 50.f;
+    p.bComf = 75.f;
     p.delta = 4.f;
     setIdmParams(p);
 }

@@ -356,6 +356,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     bool leaderFromRed   = false;
     bool leaderFromStop  = false;
     bool leaderFromP2P   = false;   // negociation P2P : Claim domine
+    bool leaderFromPlatoon = false; // peloton virtuel : meneur projete mobile
     bool stopForceHalt   = false;   // arret FERME a la ligne d'un STOP
 
     const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
@@ -499,6 +500,21 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     }
                 }
             }
+
+            // --- Virtual Platooning : meneur virtuel MOBILE (voie croisee
+            //     projetee). On ne s'arrete pas : on se cale derriere via l'IDM.
+            //     Fusion avec le leader courant : le plus contraignant gagne.
+            if (decision.followVirtualLeader) {
+                core::behavior::LeaderInfo vlead;
+                vlead.present = true;
+                vlead.gap     = std::max(decision.virtualLeaderGap, 0.f);
+                vlead.speed   = std::max(decision.virtualLeaderSpeed, 0.f);
+                if (!leader.present || vlead.gap < leader.gap) {
+                    leader            = vlead;
+                    leaderIsVehicle   = false;
+                    leaderFromPlatoon = true;
+                }
+            }
         }
     }
 
@@ -520,6 +536,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         currentBlockReason = BlockReason::INTERSECTION_STOP;
     } else if (leaderFromP2P) {
         currentBlockReason = BlockReason::NEGOTIATING;
+    } else if (leaderFromPlatoon) {
+        currentBlockReason = BlockReason::PLATOONING;
     } else if (leaderFromYield) {
         currentBlockReason = BlockReason::INTERSECTION_YIELD;
     } else if (leaderIsVehicle && pendingAccel < 0.f) {
@@ -568,6 +586,16 @@ void Vehicle::integrate(float dt) {
     currentSpeed  = std::max(0.f, currentSpeed);
     const float cap = pendingDesiredSpeed > 0.f ? pendingDesiredSpeed : maxSpeed;
     currentSpeed  = std::min(currentSpeed, cap);
+
+    // Anti-fluage : l'IDM approche l'arret de facon asymptotique (la derniere
+    // poignee de px/s s'eternise). Des qu'on est tres lent SANS reelle volonte
+    // d'accelerer, on colle a 0 -> arret franc. Le seuil (14 px/s) reste bien
+    // sous la vitesse de croisiere la plus basse (>=30 px/s) : aucun vehicule
+    // qui roule normalement n'est fige. Un demarrage donne pendingAccel >> 2
+    // (l'IDM pousse fort depuis l'arret) -> la condition ne s'y declenche pas.
+    constexpr float kCreepSpeed = 14.f;   // px/s
+    constexpr float kCreepAccel = 2.f;    // px/s^2
+    if (currentSpeed < kCreepSpeed && pendingAccel < kCreepAccel) currentSpeed = 0.f;
 
     s += currentSpeed * dt;
     if (s > currentLane->getLength()) s = currentLane->getLength();

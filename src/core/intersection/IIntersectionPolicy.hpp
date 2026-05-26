@@ -35,6 +35,16 @@ struct Decision {
     // Estimation du temps que la situation reste defavorable (info diagnostique).
     // 0.f = inconnu. Utile pour le scheduling / l'attente en STOP/YIELD.
     float yieldUntilT = 0.f;
+
+    // --- Virtual Platooning ---
+    // Si vrai, l'agent ne s'arrete PAS : il suit un MENEUR VIRTUEL MOBILE
+    // (un vehicule d'une voie croisee, projete sur sa propre trajectoire) afin
+    // de s'inserer en "fermeture eclair" sans rompre le flux. L'agent construit
+    // un leader IDM { gap = virtualLeaderGap, speed = virtualLeaderSpeed } et le
+    // fusionne avec son leader reel (le plus contraignant l'emporte).
+    bool  followVirtualLeader = false;
+    float virtualLeaderGap    = 0.f;   // px le long de MA trajectoire
+    float virtualLeaderSpeed  = 0.f;   // px/s du meneur projete
 };
 
 // Snapshot du demandeur passe a la policy.

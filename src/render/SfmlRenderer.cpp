@@ -348,6 +348,21 @@ void SfmlRenderer::drawIntersections(const World& world) {
                 target_.draw(hbar);
                 break;
             }
+
+            case RegulationType::VIRTUAL_PLATOON: {
+                // Peloton virtuel : double chevron evoquant l'entrelacement.
+                for (int s = -1; s <= 1; s += 2) {
+                    sf::CircleShape chev(8.f, 3);
+                    chev.setOrigin(8.f, 8.f);
+                    chev.setPosition(center.x + s * 4.f, center.y);
+                    chev.setFillColor(sf::Color(120, 200, 255, 200));
+                    chev.setOutlineColor(sf::Color::Black);
+                    chev.setOutlineThickness(1.f);
+                    chev.setRotation(s > 0 ? 90.f : 270.f);
+                    target_.draw(chev);
+                }
+                break;
+            }
         }
     }
 }
@@ -563,6 +578,7 @@ void SfmlRenderer::drawAgentDecision(const IAgent& agent) {
         case BlockReason::INTERSECTION_YIELD: col = sf::Color(255, 170, 0);   label = "CEDE";    break;
         case BlockReason::INTERSECTION_STOP:  col = sf::Color(230, 40, 40);   label = "STOP";    break;
         case BlockReason::NEGOTIATING:        col = sf::Color(60, 220, 180);  label = "P2P";     break;
+        case BlockReason::PLATOONING:         col = sf::Color(120, 200, 255); label = "PELOTON"; break;
         case BlockReason::INTERSECTION_RED:   col = sf::Color(230, 40, 40);   label = "FEU";     break;
         case BlockReason::LEADER_VEHICLE:     col = sf::Color(255, 120, 0);   label = "SUIT";    break;
         case BlockReason::CORNERING:          col = sf::Color(90, 160, 255);  label = "VIRAGE";  break;

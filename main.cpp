@@ -103,6 +103,7 @@ int main() {
     bool expStratFixed  = true;
     bool expStratP2P    = true;
     bool expStratAim    = false;
+    bool expStratPlatoon = false;
 
     // RNG d'UI (heterogeneite gaussienne appliquee a la flotte a la demande).
     core::Rng uiRng(0xA11CEULL);
@@ -508,11 +509,11 @@ int main() {
                     RegulationType::PRIORITY_RIGHT, RegulationType::STOP,
                     RegulationType::YIELD,          RegulationType::TRAFFIC_LIGHT,
                     RegulationType::FIXED_PRIORITY, RegulationType::P2P,
-                    RegulationType::AIM
+                    RegulationType::AIM,            RegulationType::VIRTUAL_PLATOON
                 };
                 static const char* regNames[] = {
                     "Priorite a droite", "STOP", "Cedez", "Feux",
-                    "Priorite fixe", "P2P (VANET)", "AIM (reservation)"
+                    "Priorite fixe", "P2P (VANET)", "AIM (reservation)", "Peloton virtuel"
                 };
                 const auto& inters = world->getIntersections();
                 for (std::size_t i = 0; i < inters.size(); ++i) {
@@ -543,18 +544,20 @@ int main() {
                                    "du calcul (progression en console).");
                 ImGui::SliderInt("Duree mesure (s)", &expDurationSec, 20, 180);
                 ImGui::SliderInt("Runs / point", &expRuns, 1, 5);
-                ImGui::Checkbox("Prio. Fixe", &expStratFixed); ImGui::SameLine();
-                ImGui::Checkbox("P2P", &expStratP2P);          ImGui::SameLine();
-                ImGui::Checkbox("AIM", &expStratAim);
+                ImGui::Checkbox("Prio. Fixe", &expStratFixed);  ImGui::SameLine();
+                ImGui::Checkbox("P2P", &expStratP2P);           ImGui::SameLine();
+                ImGui::Checkbox("AIM", &expStratAim);           ImGui::SameLine();
+                ImGui::Checkbox("Peloton", &expStratPlatoon);
 
                 if (ImGui::Button("Lancer l'experience", ImVec2(-1.f, 30.f))) {
                     sim::ExperimentConfig cfg;
                     cfg.durationSec  = static_cast<float>(expDurationSec);
                     cfg.runsPerPoint = expRuns;
                     cfg.strategies.clear();
-                    if (expStratFixed) cfg.strategies.push_back(RegulationType::FIXED_PRIORITY);
-                    if (expStratP2P)   cfg.strategies.push_back(RegulationType::P2P);
-                    if (expStratAim)   cfg.strategies.push_back(RegulationType::AIM);
+                    if (expStratFixed)   cfg.strategies.push_back(RegulationType::FIXED_PRIORITY);
+                    if (expStratP2P)     cfg.strategies.push_back(RegulationType::P2P);
+                    if (expStratAim)     cfg.strategies.push_back(RegulationType::AIM);
+                    if (expStratPlatoon) cfg.strategies.push_back(RegulationType::VIRTUAL_PLATOON);
                     if (!cfg.strategies.empty())
                         expResults = sim::ExperimentRunner::run(cfg, nullptr);
                 }
