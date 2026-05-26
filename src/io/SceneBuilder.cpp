@@ -25,24 +25,34 @@ void buildCrossroad(World& w, int cx, int cy, int id, RegulationType regType) {
     Approach east;  east.direction  = Approach::Direction::EAST;  east.entryTile  = {cx + 1, cy - 1}; inter.addApproach(east);
     Approach west;  west.direction  = Approach::Direction::WEST;  west.entryTile  = {cx - 2, cy};     inter.addApproach(west);
 
+    // STOP 2 voies (jamais all-way) : l'axe le plus RAPIDE est la route
+    // PRINCIPALE prioritaire ; l'autre porte le panneau STOP. Egalite de
+    // vitesse -> axe horizontal prioritaire par convention.
+    if (regType == RegulationType::STOP) {
+        const float hE = getRoadSpeedLimit(w.getTile(cx + 1, cy - 1).roadType);
+        const float hW = getRoadSpeedLimit(w.getTile(cx - 2, cy).roadType);
+        const float vN = getRoadSpeedLimit(w.getTile(cx, cy - 2).roadType);
+        const float vS = getRoadSpeedLimit(w.getTile(cx - 1, cy + 1).roadType);
+        const float hSpeed = (hE > hW) ? hE : hW;
+        const float vSpeed = (vN > vS) ? vN : vS;
+        inter.setStopMajorAxisHorizontal(hSpeed >= vSpeed);
+    }
+
     w.addIntersection(inter);
 }
 
-void buildRoundabout(World& w, int cx, int cy, int id, int outerR) {
-    if (outerR < 2) outerR = 2;
+void buildRoundabout(World& w, int x0, int y0, int id, int sideTiles) {
+    if (sideTiles < 2)       sideTiles = 2;
+    if (sideTiles % 2 != 0)  ++sideTiles;       // cote PAIR impose
 
-    // BBOX du rond-point : carre 2*outerR-1 cellules de cote, centre sur (cx, cy).
-    // Anneau = bbox - centre creux (pelouse).
-    const int x0 = cx - outerR + 1;
-    const int y0 = cy - outerR + 1;
-    const int x1 = cx + outerR - 1;
-    const int y1 = cy + outerR - 1;
+    // Bloc carre [x0, x1] x [y0, y1] de cote sideTiles. Anneau = bloc - ilot
+    // central creux (pelouse) de cote (sideTiles-2), centre.
+    const int x1 = x0 + sideTiles - 1;
+    const int y1 = y0 + sideTiles - 1;
 
-    const int hole = outerR - 1;        // taille du trou central (en tiles)
-    const int hx0 = cx - hole / 2;
-    const int hx1 = cx + (hole - 1) / 2;
-    const int hy0 = cy - hole / 2;
-    const int hy1 = cy + (hole - 1) / 2;
+    const int hole = sideTiles - 2;             // 0 pour un mini 2x2 (pas d'ilot)
+    const int hx0 = x0 + 1, hx1 = x1 - 1;
+    const int hy0 = y0 + 1, hy1 = y1 - 1;
 
     Intersection inter(id, RegulationType::ROUNDABOUT);
 
@@ -57,13 +67,11 @@ void buildRoundabout(World& w, int cx, int cy, int id, int outerR) {
         }
     }
 
-    // 4 approches cardinales : la tile juste en-dehors du bbox.
-    Approach north; north.direction = Approach::Direction::NORTH; north.entryTile = {cx, y0 - 1}; inter.addApproach(north);
-    Approach south; south.direction = Approach::Direction::SOUTH; south.entryTile = {cx, y1 + 1}; inter.addApproach(south);
-    Approach east;  east.direction  = Approach::Direction::EAST;  east.entryTile  = {x1 + 1, cy}; inter.addApproach(east);
-    Approach west;  west.direction  = Approach::Direction::WEST;  west.entryTile  = {x0 - 1, cy}; inter.addApproach(west);
-
     w.addIntersection(inter);
+
+    // Branches dynamiques : 2, 3 ou 4 sorties selon les routes raccordees au
+    // pourtour. Recalcule a chaque edition de route (cf. World::refresh...).
+    w.refreshRoundaboutApproaches();
 }
 
 void buildHRoad(World& world, int y, int xStart, int xEnd) {
@@ -155,7 +163,9 @@ void buildDemoScenario(std::unique_ptr<World>& world,
         for (int c = 0; c < 4; ++c) {
             const int C = Vcols[c], R = Hrows[r];
             if (C == 28 && R == 18) {
-                buildRoundabout(w, C, R, id++, 3);   // grand rond-point central
+                // Rond-point central, cote PAIR = 4 tiles, centre sur (28,18)
+                // -> coin haut-gauche (26,16). Ilot central 2x2.
+                buildRoundabout(w, 26, 16, id++, 4);
             } else {
                 buildCrossroad(w, C, R, id++, cyc[ci++ % 3]);
             }

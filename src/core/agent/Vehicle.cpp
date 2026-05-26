@@ -74,10 +74,10 @@ void Vehicle::rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
     const float cornerRadius = tileSize;
     localDensePath.push_back(waypoints.front());
 
-    // Bezier quadratique echantillonne (raccords lisses entree/sortie).
-    auto pushQuadBezier = [&](core::Vec2 p0, core::Vec2 p1, core::Vec2 p2, int segs) {
-        for (int k = 1; k <= segs; ++k) {
-            const float t = static_cast<float>(k) / static_cast<float>(segs);
+    // Bezier quadratique echantillonne, ajoute a la trajectoire dense.
+    auto pushQuad = [&](core::Vec2 p0, core::Vec2 p1, core::Vec2 p2, int n) {
+        for (int k = 1; k <= n; ++k) {
+            const float t = static_cast<float>(k) / static_cast<float>(n);
             const float u = 1.f - t;
             localDensePath.push_back({
                 u * u * p0.x + 2.f * u * t * p1.x + t * t * p2.x,
@@ -85,12 +85,23 @@ void Vehicle::rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
             });
         }
     };
+    // Intersection des droites (a + s.da) et (b + r.db) ; si quasi paralleles,
+    // renvoie 'fallback'.
+    auto lineX = [](core::Vec2 a, core::Vec2 da, core::Vec2 b, core::Vec2 db,
+                    core::Vec2 fallback) {
+        const float denom = core::cross(da, db);
+        if (std::abs(denom) < 1e-4f) return fallback;
+        const float s = core::cross(b - a, db) / denom;
+        return a + da * s;
+    };
 
-    // Arc circulaire du rond-point : de l'approche d'ENTREE vers l'approche de
-    // SORTIE, en respectant le SENS LEGAL francais (anti-horaire a l'ecran =
-    // angle atan2 DECROISSANT). L'ilot reste toujours a gauche -> aucun
-    // contre-sens possible. Les raccords entree/sortie sont des Bezier
-    // TANGENTS a l'arc -> plus de cassure a angle sec, juste une courbe lisse.
+    // Rond-point : arc circulaire, sens LEGAL francais (angle atan2 DECROISSANT).
+    // Au lieu de rejoindre l'anneau au point RADIAL (virage a 90° pile -> le
+    // raccord bossait/faisait une vague), on se greffe TANGENTIELLEMENT un peu
+    // plus loin sur l'arc (angle decale 'delta'). Le raccord devient un simple
+    // conge quadratique : tangente de depart = axe ROUTE (controle sur la droite
+    // de la route -> aucune embardee), tangente d'arrivee = tangente de l'ARC.
+    // Conge convexe unique -> AUCUNE vague.
     auto appendRoundaboutArc = [&](const Intersection& inter,
                                    core::Vec2 approachCenter,
                                    core::Vec2 exitCenter) {
@@ -100,34 +111,46 @@ void Vehicle::rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
         const float thEntry = std::atan2(approachCenter.y - C.y, approachCenter.x - C.x);
         const float thExit  = std::atan2(exitCenter.y    - C.y, exitCenter.x    - C.x);
 
-        const core::Vec2 entryPt{ C.x + std::cos(thEntry) * R, C.y + std::sin(thEntry) * R };
-        const core::Vec2 exitPt { C.x + std::cos(thExit)  * R, C.y + std::sin(thExit)  * R };
-
-        // Tangentes de l'arc (sens legal decroissant) : T(θ) = (sin θ, -cos θ).
-        const core::Vec2 tEntry{ std::sin(thEntry), -std::cos(thEntry) };
-        const core::Vec2 tExit { std::sin(thExit),  -std::cos(thExit)  };
-
-        // Raccord d'ENTREE : arrive sur l'anneau tangentiellement a l'arc.
-        const core::Vec2 A   = localDensePath.back();
-        const float      dIn = (entryPt - A).length() * 0.6f;
-        const core::Vec2 cpIn{ entryPt.x - tEntry.x * dIn, entryPt.y - tEntry.y * dIn };
-        pushQuadBezier(A, cpIn, entryPt, 12);
-
-        // Arc circulaire (la courbe validee, inchangee).
         float sweep = thEntry - thExit;                 // sens legal = decroissant
         while (sweep <= 0.0001f) sweep += core::math::TWO_PI;   // -> (0, 2π]
-        const int segs = std::max(10, static_cast<int>(sweep * R / 5.f));
-        for (int k = 1; k <= segs; ++k) {
+
+        // Greffe tangentielle decalee : ~25°, plafonnee a un quart du balayage
+        // de chaque cote (l'arc garde au moins la moitie de son etendue).
+        const float delta = std::min(0.45f, sweep * 0.25f);
+        const float thIn  = thEntry - delta;
+        const float thOut = thExit  + delta;
+
+        const core::Vec2 entryPt{ C.x + std::cos(thEntry) * R, C.y + std::sin(thEntry) * R };
+        const core::Vec2 Pin    { C.x + std::cos(thIn)  * R, C.y + std::sin(thIn)  * R };
+        const core::Vec2 Pout   { C.x + std::cos(thOut) * R, C.y + std::sin(thOut) * R };
+        const core::Vec2 tIn { std::sin(thIn),  -std::cos(thIn)  };  // tangente arc (deplacement)
+        const core::Vec2 tOut{ std::sin(thOut), -std::cos(thOut) };
+
+        // --- Conge d'ENTREE : A (sur la route) -> Pin (sur l'arc) ---
+        const core::Vec2 A = localDensePath.back();
+        core::Vec2 dRoadIn = entryPt - A;               // axe reel de la route (radial)
+        const float lRin = dRoadIn.length();
+        if (lRin > 1e-3f) dRoadIn /= lRin;
+        const core::Vec2 ctrlIn = lineX(A, dRoadIn, Pin, tIn, (A + Pin) * 0.5f);
+        pushQuad(A, ctrlIn, Pin, 16);
+
+        // --- ARC (courbe validee) de thIn a thOut, decroissant ---
+        float sweepArc = thIn - thOut;
+        while (sweepArc <= 0.0001f) sweepArc += core::math::TWO_PI;
+        const int segs = std::max(8, static_cast<int>(sweepArc * R / 5.f));
+        for (int k = 1; k <= segs; ++k) {               // k=segs -> Pout
             const float t = static_cast<float>(k) / static_cast<float>(segs);
-            const float a = thEntry - sweep * t;
+            const float a = thIn - sweepArc * t;
             localDensePath.push_back({ C.x + std::cos(a) * R, C.y + std::sin(a) * R });
         }
 
-        // Raccord de SORTIE : quitte l'anneau tangentiellement puis rejoint
-        // le centre de la tile de sortie.
-        const float      dOut = (exitCenter - exitPt).length() * 0.6f;
-        const core::Vec2 cpOut{ exitPt.x + tExit.x * dOut, exitPt.y + tExit.y * dOut };
-        pushQuadBezier(exitPt, cpOut, exitCenter, 12);
+        // --- Conge de SORTIE : Pout (sur l'arc) -> exitCenter (sur la route) ---
+        core::Vec2 dRoadOut = exitCenter - C;           // axe route = radiale sortante
+        const float lRout = dRoadOut.length();
+        if (lRout > 1e-3f) dRoadOut /= lRout;
+        const core::Vec2 ctrlOut = lineX(Pout, tOut, exitCenter, dRoadOut,
+                                         (Pout + exitCenter) * 0.5f);
+        pushQuad(Pout, ctrlOut, exitCenter, 16);
     };
 
     std::size_t i = 0;
@@ -325,14 +348,26 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     // --- Leader virtuel issu de la policy d'intersection ---
     bool leaderFromYield = false;
     bool leaderFromRed   = false;
+    bool leaderFromStop  = false;
+    bool stopForceHalt   = false;   // arret FERME a la ligne d'un STOP
 
     const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
     if (interOn) {
         isCommittedToPass       = true;
         committedIntersectionId = interOn->getId();
-    } else if (isCommittedToPass) {
+        wasOnCommittedInter     = true;          // on est PHYSIQUEMENT dessus
+    } else if (isCommittedToPass && wasOnCommittedInter) {
+        // On ne libere QU'APRES avoir reellement traverse (etre passe SUR
+        // l'intersection puis en etre ressorti). Sinon, un vehicule qui vient
+        // de s'engager (mais pas encore entre) verrait son commit/STOP efface
+        // chaque frame -> oscillation stop/redemarrage a 1 px/s.
         isCommittedToPass       = false;
         committedIntersectionId = -1;
+        wasOnCommittedInter     = false;
+        // Re-arme l'etat STOP pour une eventuelle future approche.
+        currentStopIntersectionId = -1;
+        stopHeldTime              = 0.f;
+        stopReleased              = false;
     }
 
     if (!interOn) {
@@ -355,6 +390,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             ctx.self.speed    = currentSpeed;
             ctx.self.heading  = currentAngle;
             ctx.self.length   = getLength();
+            ctx.self.accel    = idm.params().aMax;   // pour estimer mon temps de degagement
             ctx.self.from     = myDir;
             ctx.selfAgent     = this;
             ctx.tileSize      = tileSize;
@@ -363,20 +399,79 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // Si l'agent est physiquement engage (carrosserie deja sur la
             // ligne d'arret), on force le passage : freiner ici provoquerait
             // un arret AU MILIEU du carrefour et bloquerait les flux croises.
+            // EXCEPTION : a un STOP non encore libere, on ne s'auto-engage PAS
+            // (sinon on franchirait le stop sans s'arreter).
+            const bool  isStopAhead = (interAhead->getType() == RegulationType::STOP);
+            const bool  stopDone     = isStopAhead &&
+                                       currentStopIntersectionId == interAhead->getId() &&
+                                       stopReleased;
             const float engagedThreshold = ctx.self.length / 2.f + 10.f;
-            if (distToInter < engagedThreshold) {
+            if (distToInter < engagedThreshold && (!isStopAhead || stopDone)) {
                 isCommittedToPass       = true;
                 committedIntersectionId = interAhead->getId();
             }
 
             const auto decision = interAhead->request(ctx);
 
-            if (decision.canEnter ||
+            // --- STOP : arret FERME a la ligne (pas de rampe a 1 km/h), puis
+            //     redemarrage des qu'on peut passer (ou apres temporisation). ---
+            // La policy STOP est sans etat ; l'etat "j'ai marque l'arret a CE
+            // stop" + la liberation vivent ici (par-agent).
+            bool canPass = decision.canEnter;
+            if (interAhead->getType() == RegulationType::STOP) {
+                constexpr float kFixedDt      = 1.f / 60.f;  // pas de simulation fixe
+                constexpr float kHaltZone     = 16.f;        // px : "arrive a la ligne"
+                constexpr float kHaltSpeed    = 20.f;        // px/s : on commence a compter
+                constexpr float kRequiredHalt = 0.25f;       // s d'arret marque (bref) exige
+
+                const int sid = interAhead->getId();
+                if (currentStopIntersectionId != sid) {      // nouveau stop -> reset
+                    currentStopIntersectionId = sid;
+                    stopHeldTime = 0.f;
+                    stopReleased = false;
+                }
+
+                if (!stopReleased) {
+                    // "A la ligne" = la policy ne me demande plus d'approcher
+                    // (gap d'arret quasi nul). Vrai aussi bien quand la voie est
+                    // libre (canEnter) que quand on cede (shouldStop, gap 0).
+                    const bool atLine = (decision.stopLineGap <= kHaltZone);
+                    if (atLine) {
+                        // On marque l'arret (compte le temps une fois ~immobile)
+                        // et on FIGE l'arret a la ligne tant qu'on n'est pas
+                        // libere -> arret net, pas de rampe a 1 km/h.
+                        if (currentSpeed <= kHaltSpeed) stopHeldTime += kFixedDt;
+
+                        // Liberation : arret bref marque ET voie SURE (canEnter,
+                        // qui tient compte de mon temps de degagement). Evaluee
+                        // independamment de shouldStop -> on repart vraiment des
+                        // que c'est libre (c'etait LE bug : plus personne ne
+                        // passait car canEnter et shouldStop s'excluent).
+                        if (stopHeldTime >= kRequiredHalt && decision.canEnter)
+                            stopReleased = true;
+                        else
+                            stopForceHalt = true;
+                    }
+                    // sinon (encore loin) : approche normale -> leader virtuel
+                    // de freinage via la branche shouldStop ci-dessous.
+                }
+                canPass = stopReleased;
+            }
+
+            if (canPass ||
                 (isCommittedToPass && committedIntersectionId == interAhead->getId())) {
                 if (distToInter < 60.f) {
                     isCommittedToPass       = true;
                     committedIntersectionId = interAhead->getId();
                 }
+            } else if (stopForceHalt) {
+                // Arret ferme PILE a la ligne : leader virtuel colle (gap 0).
+                leader          = core::behavior::LeaderInfo{};
+                leader.present  = true;
+                leader.gap      = 0.f;
+                leader.speed    = 0.f;
+                leaderIsVehicle = false;
+                leaderFromStop  = true;
             } else if (decision.shouldStop) {
                 core::behavior::LeaderInfo virtualLeader;
                 virtualLeader.present = true;
@@ -388,6 +483,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     leaderIsVehicle = false;
                     if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
                         leaderFromRed = true;
+                    } else if (interAhead->getType() == RegulationType::STOP) {
+                        leaderFromStop = true;
                     } else {
                         leaderFromYield = true;
                     }
@@ -399,11 +496,19 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     // --- IDM ---
     pendingAccel = idm.computeAcceleration(currentSpeed, v0, leader);
 
+    // STOP : a la ligne (et tant qu'on n'est pas libere) on appuie franchement
+    // le frein -> arret net, pas de rampe a 1 km/h jusqu'au bout de la tile.
+    if (stopForceHalt && !stopReleased) {
+        pendingAccel = std::min(pendingAccel, -idm.params().aMax * 2.5f);
+    }
+
     // --- Diagnostic du motif de blocage ---
     if (overtakeState != OvertakeState::NONE) {
         currentBlockReason = BlockReason::OVERTAKING;
     } else if (leaderFromRed) {
         currentBlockReason = BlockReason::INTERSECTION_RED;
+    } else if (leaderFromStop) {
+        currentBlockReason = BlockReason::INTERSECTION_STOP;
     } else if (leaderFromYield) {
         currentBlockReason = BlockReason::INTERSECTION_YIELD;
     } else if (leaderIsVehicle && pendingAccel < 0.f) {
@@ -550,6 +655,7 @@ void Vehicle::resetToStart(const World& world) {
     pendingDesiredSpeed  = 0.f;
     isCommittedToPass       = false;
     committedIntersectionId = -1;
+    wasOnCommittedInter     = false;
     currentBlockReason   = core::agent::BlockReason::INITIALIZING;
     isBroken             = false;
     breakdownTimer       = 0.f;

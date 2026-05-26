@@ -43,6 +43,7 @@ struct AgentContext {
     float speed = 0.f;        // px/s
     float heading = 0.f;      // degres
     float length = 0.f;       // longueur carrosserie (px)
+    float accel = 0.f;        // acceleration max (px/s^2) -> temps pour degager un STOP
     Approach::Direction from = Approach::Direction::NORTH;
 };
 

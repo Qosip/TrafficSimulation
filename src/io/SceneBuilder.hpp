@@ -17,11 +17,12 @@ namespace scene {
 // Pose une intersection 2x2 a partir de (cx-1, cy-1) jusqu'a (cx, cy).
 void buildCrossroad(World& world, int cx, int cy, int id, RegulationType regType);
 
-// Pose un rond-point centre sur (cx, cy) avec un rayon outerR (en tiles).
-// L'anneau d'intersection fait outerR cellules d'epaisseur 1, le centre est
-// laisse en pelouse (NONE). Les 4 approches cardinales sont posees au bord
-// exterieur. outerR doit etre >= 2.
-void buildRoundabout(World& world, int cx, int cy, int id, int outerR);
+// Pose un rond-point dont le coin haut-gauche est (x0, y0) et le cote mesure
+// 'sideTiles' cellules. sideTiles est FORCE PAIR (>= 2) : un anneau carre dont
+// l'ilot central creux (pelouse) fait (sideTiles-2) de cote. Les branches
+// (entrees/sorties) sont recalculees dynamiquement selon les routes raccordees
+// au pourtour (cf. World::refreshRoundaboutApproaches), donc 2, 3 ou 4 sorties.
+void buildRoundabout(World& world, int x0, int y0, int id, int sideTiles);
 
 // Pose une route horizontale 2 voies (LEFT/RIGHT) sur deux lignes y et y-1.
 void buildHRoad(World& world, int y, int xStart, int xEnd);

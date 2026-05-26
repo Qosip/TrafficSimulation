@@ -50,6 +50,12 @@ public:
     void addIntersection(const Intersection& intersection);
     void updateIntersections(float dt);
 
+    // Recalcule dynamiquement les branches (entrees/sorties) de CHAQUE
+    // rond-point a partir des routes effectivement raccordees a son pourtour.
+    // Permet d'avoir 2, 3 ou 4 sorties selon ce qui est connecte, et de mettre
+    // a jour la geometrie quand on ajoute/retire une route en mode construction.
+    void refreshRoundaboutApproaches();
+
     const std::vector<Intersection>& getIntersections() const { return intersections; }
     const Intersection* getIntersectionAt(float worldX, float worldY) const;
     const Intersection* getIntersectionNear(float worldX, float worldY, float radius) const;

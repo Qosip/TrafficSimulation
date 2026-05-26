@@ -35,9 +35,9 @@ bool exportScenario(const std::string& filename,
         const auto& tiles = inter.getCoveredTiles();
         if (tiles.empty()) continue;
 
-        // Grand rond-point (anneau > 4 tiles) : on serialise centre + rayon
-        // pour le reconstruire fidelement via buildRoundabout (le format 'I'
-        // ne saurait recreer que des carrefours 2x2).
+        // Grand rond-point (anneau > 4 tiles) : on serialise coin haut-gauche
+        // + cote pour le reconstruire fidelement via buildRoundabout (le format
+        // 'I' ne saurait recreer que des carrefours 2x2).
         if (inter.getType() == RegulationType::ROUNDABOUT && tiles.size() > 4) {
             int minX = tiles[0].x, minY = tiles[0].y;
             int maxX = tiles[0].x, maxY = tiles[0].y;
@@ -45,11 +45,9 @@ bool exportScenario(const std::string& filename,
                 if (t.x < minX) minX = t.x; if (t.x > maxX) maxX = t.x;
                 if (t.y < minY) minY = t.y; if (t.y > maxY) maxY = t.y;
             }
-            const int cx     = (minX + maxX) / 2;
-            const int cy     = (minY + maxY) / 2;
-            const int outerR = ((maxX - minX + 1) + 1) / 2;  // bbox = 2*outerR - 1
-            file << "R " << cx << " " << cy << " " << inter.getId() << " "
-                 << outerR << "\n";
+            const int side = (maxX - minX + 1);   // cote du bloc (pair par construction)
+            file << "R " << minX << " " << minY << " " << inter.getId() << " "
+                 << side << "\n";
         } else {
             core::TileCoord firstTile = tiles[0];
             file << "I " << firstTile.x + 1 << " " << firstTile.y + 1 << " "
@@ -95,8 +93,8 @@ bool importScenario(const std::string& filename,
                                   static_cast<RegulationType>(rType));
         }
         else if (entryType == 'R' && outWorld) {
-            int cx, cy, id, outerR; ss >> cx >> cy >> id >> outerR;
-            scene::buildRoundabout(*outWorld, cx, cy, id, outerR);
+            int x0, y0, id, side; ss >> x0 >> y0 >> id >> side;
+            scene::buildRoundabout(*outWorld, x0, y0, id, side);
         }
         else if (entryType == 'A' && outWorld) {
             std::string type; int sx, sy, gx, gy;

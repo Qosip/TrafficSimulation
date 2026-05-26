@@ -38,6 +38,7 @@ Intersection::Intersection(const Intersection& o)
       coveredTiles(o.coveredTiles), approaches(o.approaches),
       lightTimer(o.lightTimer), currentPhase(o.currentPhase),
       greenDuration(o.greenDuration), orangeDuration(o.orangeDuration),
+      stopMajorHorizontal_(o.stopMajorHorizontal_),
       policy_(makePolicyFor(o.type))
 {}
 
@@ -51,6 +52,7 @@ Intersection& Intersection::operator=(const Intersection& o) {
     currentPhase   = o.currentPhase;
     greenDuration  = o.greenDuration;
     orangeDuration = o.orangeDuration;
+    stopMajorHorizontal_ = o.stopMajorHorizontal_;
     policy_        = makePolicyFor(o.type);
     return *this;
 }
@@ -59,6 +61,7 @@ Intersection::~Intersection() = default;
 
 void Intersection::addCoveredTile(core::TileCoord tile) { coveredTiles.push_back(tile); }
 void Intersection::addApproach(const Approach& approach) { approaches.push_back(approach); }
+void Intersection::clearApproaches() { approaches.clear(); }
 
 void Intersection::update(float dt) {
     if (type == RegulationType::TRAFFIC_LIGHT) updateTrafficLight(dt);

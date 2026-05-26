@@ -52,7 +52,14 @@ public:
 
     void addCoveredTile(core::TileCoord tile);
     void addApproach(const Approach& approach);
+    void clearApproaches();
     void update(float dt);
+
+    // STOP 2 voies : axe prioritaire. true = horizontal (E-O) prioritaire,
+    // l'axe vertical (N-S) porte le panneau STOP. La route principale ne
+    // s'arrete jamais ; seule la branche secondaire cede.
+    bool isStopMajorAxisHorizontal() const { return stopMajorHorizontal_; }
+    void setStopMajorAxisHorizontal(bool horizontal) { stopMajorHorizontal_ = horizontal; }
 
     // Wave 5 : seule API publique de regulation. Decision riche pour pilotage IDM.
     core::intersection::Decision request(const core::intersection::PolicyContext& ctx) const;

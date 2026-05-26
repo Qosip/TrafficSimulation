@@ -144,21 +144,40 @@ void SfmlRenderer::drawIntersections(const World& world) {
             }
 
             case RegulationType::STOP: {
-                // Panneau STOP : octogone rouge avec ecrit "S" central.
-                sf::CircleShape octa(12.f, 8);
-                octa.setOrigin(12.f, 12.f);
-                octa.setPosition(center);
-                octa.setFillColor(sf::Color(200, 30, 30));
-                octa.setOutlineColor(sf::Color::White);
-                octa.setOutlineThickness(2.f);
-                octa.setRotation(22.5f);
-                target_.draw(octa);
-                // Marque centrale
-                sf::RectangleShape bar(sf::Vector2f(10.f, 2.f));
-                bar.setOrigin(5.f, 1.f);
-                bar.setPosition(center);
-                bar.setFillColor(sf::Color::White);
-                target_.draw(bar);
+                // STOP 2 voies : le panneau octogonal rouge n'est pose QUE sur
+                // les branches SECONDAIRES (celles qui doivent ceder), pas sur
+                // l'axe principal prioritaire. On le place a l'entree de chaque
+                // approche concernee (comme un vrai panneau au bord de la voie).
+                const bool majorH = inter.isStopMajorAxisHorizontal();
+                for (const auto& app : inter.getApproaches()) {
+                    const bool appHoriz = (app.direction == Approach::Direction::EAST ||
+                                           app.direction == Approach::Direction::WEST);
+                    if (appHoriz == majorH) continue;   // axe principal -> pas de STOP
+
+                    float px = app.entryTile.x * ts + ts / 2.f;
+                    float py = app.entryTile.y * ts + ts / 2.f;
+                    switch (app.direction) {
+                        case Approach::Direction::NORTH: px += ts * 0.35f; break;
+                        case Approach::Direction::SOUTH: px -= ts * 0.35f; break;
+                        case Approach::Direction::EAST:  py += ts * 0.35f; break;
+                        case Approach::Direction::WEST:  py -= ts * 0.35f; break;
+                    }
+
+                    sf::CircleShape octa(11.f, 8);
+                    octa.setOrigin(11.f, 11.f);
+                    octa.setPosition(px, py);
+                    octa.setFillColor(sf::Color(200, 30, 30));
+                    octa.setOutlineColor(sf::Color::White);
+                    octa.setOutlineThickness(2.f);
+                    octa.setRotation(22.5f);
+                    target_.draw(octa);
+
+                    sf::RectangleShape bar(sf::Vector2f(9.f, 2.f));
+                    bar.setOrigin(4.5f, 1.f);
+                    bar.setPosition(px, py);
+                    bar.setFillColor(sf::Color::White);
+                    target_.draw(bar);
+                }
                 break;
             }
 

@@ -1,17 +1,20 @@
 // src/core/intersection/StopPolicy.cpp
 //
-// STOP (all-way) : 3 phases.
-//   1) Approche -> shouldStop tant que stopGap > 5 px.
-//   2) Marquage -> shouldStop tant qu'on n'est pas a l'arret complet a la ligne.
-//   3) Engagement spatial SANS interblocage : on cede aux vehicules dans la
-//      boite ou PLUS PROCHES du centre, tie-break stable a egalite, et on
-//      IGNORE le trafic encore loin (il devra s'arreter aussi). Garantit
-//      toujours un gagnant unique -> personne ne reste bloque indefiniment.
+// STOP 2 voies (et NON all-way). Modele : 1 route PRINCIPALE prioritaire + 1
+// route SECONDAIRE qui porte le panneau STOP.
+//   * Agent sur l'axe PRINCIPAL  -> ne s'arrete jamais (canEnter = true).
+//   * Agent sur l'axe SECONDAIRE -> 3 phases :
+//       1) Approche  : freine jusqu'a la ligne d'arret.
+//       2) Marquage  : arret complet exige a la ligne.
+//       3) Insertion : repart des que l'axe principal est LIBRE (aucun
+//          vehicule principal engage ou arrivant dans la fenetre de temps).
+//
+// Plus de "cede a droite" permanent : quand l'axe principal est vide, le
+// vehicule secondaire repart immediatement.
 #include "core/intersection/StopPolicy.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 #include "core/agent/IAgent.hpp"
 #include "core/intersection/Intersection.hpp"
@@ -33,20 +36,42 @@ Vec2 computeCenter(const Intersection& inter, float tileSize) {
     return c / static_cast<float>(tiles.size());
 }
 
+// Vrai si la direction d'arrivee est portee par l'axe horizontal (E-O).
+bool isHorizontalApproach(Approach::Direction d) {
+    return d == Approach::Direction::EAST || d == Approach::Direction::WEST;
+}
+
+// Classe un AUTRE vehicule sur l'axe horizontal d'apres son cap (heading deg).
+// cos(cap) ~ ±1 => roule horizontalement ; sin(cap) ~ ±1 => verticalement.
+bool isHorizontalHeading(float headingDeg) {
+    const float r = headingDeg * core::math::DEG2RAD;
+    return std::abs(std::cos(r)) >= std::abs(std::sin(r));
+}
+
 } // namespace
 
 Decision StopPolicy::request(const PolicyContext& ctx,
-                              const Intersection& inter) const
+                             const Intersection& inter) const
 {
     Decision d;
 
-    const Vec2  center        = computeCenter(inter, ctx.tileSize);
-    const float interHalf     = ctx.tileSize;
-    const float distToCenter  = (center - ctx.self.position).length();
-    const float buffer        = 25.f + ctx.self.length / 2.f;
-    const float stopLineGap   = std::max(0.f, distToCenter - interHalf - buffer);
+    // --- Axe principal : aucun arret, priorite totale. -------------------
+    const bool selfHorizontal = isHorizontalApproach(ctx.self.from);
+    const bool selfOnMajor     = (selfHorizontal == inter.isStopMajorAxisHorizontal());
+    if (selfOnMajor) {
+        d.canEnter   = true;
+        d.shouldStop = false;
+        return d;
+    }
 
-    // Phase 1 : approche -> brake jusqu'a la ligne.
+    // --- Axe secondaire : panneau STOP. ----------------------------------
+    const Vec2  center       = computeCenter(inter, ctx.tileSize);
+    const float interHalf    = ctx.tileSize;
+    const float distToCenter = (center - ctx.self.position).length();
+    const float buffer       = 12.f + ctx.self.length / 2.f;
+    const float stopLineGap  = std::max(0.f, distToCenter - interHalf - buffer);
+
+    // Phase 1 : approche -> freine jusqu'a la ligne.
     if (stopLineGap > 5.f) {
         d.canEnter    = false;
         d.shouldStop  = true;
@@ -54,7 +79,7 @@ Decision StopPolicy::request(const PolicyContext& ctx,
         return d;
     }
 
-    // Phase 2 : a la ligne mais encore en mouvement -> force halt.
+    // Phase 2 : a la ligne mais encore en mouvement -> arret complet exige.
     if (ctx.self.speed > params_.haltSpeedEpsilon) {
         d.canEnter    = false;
         d.shouldStop  = true;
@@ -62,38 +87,53 @@ Decision StopPolicy::request(const PolicyContext& ctx,
         return d;
     }
 
-    // Phase 3 : arret marque -> engagement facon "all-way stop", robuste et
-    // SANS interblocage. La regle est purement spatiale (qui est le plus proche
-    // de la boite passe), ce qui garantit toujours un gagnant unique :
-    //   * on cede a tout vehicule deja DANS le carrefour (ou en approche immediate) ;
-    //   * on cede a tout vehicule PLUS PROCHE du centre que nous (il s'engage avant) ;
-    //   * a distance ~egale, un seul gagne via tie-break stable (X puis Y) ;
-    //   * on IGNORE le trafic encore loin : en all-way stop il devra s'arreter
-    //     lui aussi. (C'etait LA cause du blocage : on cedait au flux transversal
-    //     encore en mouvement, donc plus personne ne repartait.)
-    constexpr float eps        = 1.0f;                       // px : tolerance "egalite"
-    const float     insideDist = interHalf + ctx.tileSize * 0.3f;
+    // Phase 3 : arret marque -> insertion des que c'est SUR. On ne cede qu'aux
+    // vehicules de l'axe PRINCIPAL :
+    //   (a) deja dans/au bord de la boite                       -> conflit ;
+    //   (b) en approche arrivant AVANT que J'AIE FINI de degager -> conflit.
+    // Le temps de degagement tient compte de MA distance a parcourir (entrer +
+    // traverser + degager ma longueur) et de MON acceleration depuis l'arret :
+    // un vehicule lent/long exige un creneau plus grand -> on passe sans crash.
+    // Si l'axe est libre dans cette fenetre, on repart IMMEDIATEMENT.
+    const float dangerDist = interHalf + ctx.tileSize * 0.4f;   // boite + marge
+
+    // Temps qu'il me faut pour degager le carrefour depuis l'arret.
+    const float egoAccel  = (ctx.self.accel > 1.f) ? ctx.self.accel : 60.f;
+    const float crossDist = distToCenter + interHalf + ctx.self.length;  // jusqu'a sortir cote oppose
+    const float tClear    = std::sqrt(2.f * crossDist / (egoAccel * 0.85f));
+    const float safeTime  = tClear + 0.8f;                      // + marge de securite
 
     bool conflict = false;
     for (const auto& other : *ctx.others) {
         if (!other) continue;
         if (other.get() == ctx.selfAgent) continue;
 
+        // On ignore tout ce qui n'est PAS sur l'axe principal.
+        if (isHorizontalHeading(other->getHeading()) != inter.isStopMajorAxisHorizontal())
+            continue;
+
         const Vec2  oPos{ other->getPosition().x, other->getPosition().y };
         const float dO = (oPos - center).length();
-        if (dO > params_.gap.scanRadius) continue;
+        // Borne large : meme rapide (≈350 px/s), au-dela il ne peut pas
+        // atteindre la boite pendant mon temps de degagement -> sans risque.
+        if (dO > safeTime * 350.f + dangerDist) continue;
 
-        if (dO < insideDist)            { conflict = true; break; } // dans la boite
-        if (dO < distToCenter - eps)    { conflict = true; break; } // plus proche -> prioritaire
+        // (a) vehicule principal engage / tout proche de la boite.
+        if (dO < dangerDist) { conflict = true; break; }
 
-        if (dO <= distToCenter + eps) {                              // ~egalite : tie-break
-            const bool iWin =
-                (ctx.self.position.x <  oPos.x - eps) ||
-                (std::abs(ctx.self.position.x - oPos.x) <= eps &&
-                 ctx.self.position.y <  oPos.y - eps);
-            if (!iWin) { conflict = true; break; }
+        // (b) vehicule principal en approche : arrive-t-il avant la fin de mon
+        //     degagement ? (sa vitesse propre est prise en compte).
+        const Vec2  toCenter = (center - oPos);
+        const float len      = toCenter.length();
+        if (len < 1.f) { conflict = true; break; }
+        const float hr  = other->getHeading() * core::math::DEG2RAD;
+        const Vec2  vel { std::cos(hr), std::sin(hr) };
+        const float approaching = core::dot(vel, toCenter / len);   // >0 => se rapproche
+        const float oSpeed = other->getSpeed();
+        if (approaching > 0.25f && oSpeed > params_.haltSpeedEpsilon) {
+            const float tEnter = (dO - dangerDist) / oSpeed;
+            if (tEnter < safeTime) { conflict = true; break; }
         }
-        // sinon : plus loin -> ignore (il s'arretera aussi).
     }
 
     if (conflict) {

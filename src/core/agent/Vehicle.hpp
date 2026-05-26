@@ -54,6 +54,7 @@ protected:
     // si la priorite bascule pendant la traversee.
     bool isCommittedToPass       = false;
     int  committedIntersectionId = -1;
+    bool wasOnCommittedInter     = false;  // a-t-on deja ete PHYSIQUEMENT sur l'inter ?
 
     // --- Wave 6 : Personality / Breakdown / Overtake ---
     core::agent::Personality personality_;

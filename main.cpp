@@ -89,7 +89,7 @@ int main() {
     bool buildMode = false;
     bool showFlowDebug = false; // --- NOUVEAU : Variable d'état du bouton ---
     BuildTool currentTool = BuildTool::ROAD_CITY_50;
-    int  roundaboutRadius = 3;   // rayon en tiles (>= 2). 2 => mini, 3 => 5x5, 4 => 7x7.
+    int  roundaboutSide = 4;     // cote en tiles, PAIR (2,4,6,8). 2 = mini, 4 = anneau 4x4...
     bool isPaused = false;
     float simSpeedFactor = 1.0f;
 
@@ -203,10 +203,28 @@ int main() {
                                     ? ex.direction : TileDirection::UP;
                                 paintRoadTile(gX, gY, d0);
                             }
+                            else if (currentTool == BuildTool::INTERSECTION_ROUNDABOUT) {
+                                // Rond-point : cote PAIR, coin haut-gauche = tile cliquee.
+                                int side = roundaboutSide;
+                                if (side < 2)      side = 2;
+                                if (side % 2 != 0) ++side;
+                                if (gX >= 0 && gY >= 0 &&
+                                    gX + side <= world->getGridWidth() &&
+                                    gY + side <= world->getGridHeight()) {
+                                    bool hasRoad = false;
+                                    for (int i = 0; i < side; ++i)
+                                        for (int j = 0; j < side; ++j)
+                                            if (world->getTile(gX+i, gY+j).roadType != RoadType::NONE) hasRoad = true;
+                                    if (hasRoad) {
+                                        const int newId = world->getIntersections().size() + 1;
+                                        scene::buildRoundabout(*world, gX, gY, newId, side);
+                                        pendingRebuild = true;
+                                    }
+                                }
+                            }
                             else if (currentTool == BuildTool::INTERSECTION_PRIORITY ||
                                      currentTool == BuildTool::INTERSECTION_TRAFFIC_LIGHT ||
-                                     currentTool == BuildTool::INTERSECTION_STOP ||
-                                     currentTool == BuildTool::INTERSECTION_ROUNDABOUT) {
+                                     currentTool == BuildTool::INTERSECTION_STOP) {
                                 if (gX >= 0 && gX < world->getGridWidth() - 1 && gY >= 0 && gY < world->getGridHeight() - 1) {
                                     bool hasRoad = false;
                                     for(int i=0;i<2;++i)
@@ -214,18 +232,13 @@ int main() {
                                             if(world->getTile(gX+i,gY+j).roadType != RoadType::NONE) hasRoad = true;
                                     if (hasRoad) {
                                         const int newId = world->getIntersections().size() + 1;
-                                        if (currentTool == BuildTool::INTERSECTION_ROUNDABOUT && roundaboutRadius >= 3) {
-                                            scene::buildRoundabout(*world, gX + 1, gY + 1, newId, roundaboutRadius);
-                                        } else {
-                                            RegulationType reg = RegulationType::PRIORITY_RIGHT;
-                                            switch (currentTool) {
-                                                case BuildTool::INTERSECTION_TRAFFIC_LIGHT: reg = RegulationType::TRAFFIC_LIGHT; break;
-                                                case BuildTool::INTERSECTION_STOP:          reg = RegulationType::STOP; break;
-                                                case BuildTool::INTERSECTION_ROUNDABOUT:    reg = RegulationType::ROUNDABOUT; break;
-                                                default: break;
-                                            }
-                                            scene::buildCrossroad(*world, gX + 1, gY + 1, newId, reg);
+                                        RegulationType reg = RegulationType::PRIORITY_RIGHT;
+                                        switch (currentTool) {
+                                            case BuildTool::INTERSECTION_TRAFFIC_LIGHT: reg = RegulationType::TRAFFIC_LIGHT; break;
+                                            case BuildTool::INTERSECTION_STOP:          reg = RegulationType::STOP; break;
+                                            default: break;
                                         }
+                                        scene::buildCrossroad(*world, gX + 1, gY + 1, newId, reg);
                                         pendingRebuild = true;
                                     }
                                 }
@@ -263,6 +276,7 @@ int main() {
                     if (event.mouseButton.button == sf::Mouse::Left) draggingRoad = false;
                     // Recalcul des chemins une seule fois, a la fin du geste.
                     if (pendingRebuild && world) {
+                        world->refreshRoundaboutApproaches();   // sorties dynamiques
                         renderer.invalidateMapCache();
                         for (auto& agent : agents) agent->recalculatePath(*world);
                         pendingRebuild = false;
@@ -366,15 +380,15 @@ int main() {
                             case BuildTool::INTERSECTION_TRAFFIC_LIGHT:
                             case BuildTool::INTERSECTION_STOP:
                                 gw = 2; gh = 2; col = core::Color{255, 210, 40, 70}; break;
-                            case BuildTool::INTERSECTION_ROUNDABOUT:
-                                if (roundaboutRadius >= 3) {
-                                    const int side = 2 * roundaboutRadius - 1;
-                                    tlx = hoverX + 2 - roundaboutRadius;
-                                    tly = hoverY + 2 - roundaboutRadius;
-                                    gw = side; gh = side;
-                                } else { gw = 2; gh = 2; }
+                            case BuildTool::INTERSECTION_ROUNDABOUT: {
+                                int side = roundaboutSide;
+                                if (side < 2)      side = 2;
+                                if (side % 2 != 0) ++side;
+                                tlx = hoverX; tly = hoverY;   // coin haut-gauche
+                                gw = side; gh = side;
                                 col = core::Color{60, 160, 255, 70};
                                 break;
+                            }
                             case BuildTool::ERASE: col = core::Color{255, 60, 60, 80}; break;
                         }
                         renderer.drawBuildFootprint(tlx, tly, gw, gh, TILE_SIZE, col);
@@ -417,8 +431,9 @@ int main() {
                     if (ImGui::RadioButton("Carrefour STOP        [5]", currentTool == BuildTool::INTERSECTION_STOP)) currentTool = BuildTool::INTERSECTION_STOP;
                     if (ImGui::RadioButton("Rond-point            [6]", currentTool == BuildTool::INTERSECTION_ROUNDABOUT)) currentTool = BuildTool::INTERSECTION_ROUNDABOUT;
                     if (currentTool == BuildTool::INTERSECTION_ROUNDABOUT) {
-                        ImGui::SliderInt("Rayon RDP (tiles)", &roundaboutRadius, 2, 4);
-                        ImGui::TextDisabled("2 = mini 2x2, 3 = 5x5 anneau, 4 = 7x7 anneau");
+                        ImGui::SliderInt("Cote RDP (tiles)", &roundaboutSide, 2, 8);
+                        if (roundaboutSide % 2 != 0) ++roundaboutSide;   // toujours PAIR
+                        ImGui::TextDisabled("Cote PAIR (2,4,6,8). Coin = tile cliquee.");
                     }
                     if (ImGui::RadioButton("Gomme / Effacer       [7]", currentTool == BuildTool::ERASE)) currentTool = BuildTool::ERASE;
 

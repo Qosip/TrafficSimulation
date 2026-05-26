@@ -134,6 +134,42 @@ void World::updateIntersections(float dt) {
     for (auto& inter : intersections) inter.update(dt);
 }
 
+void World::refreshRoundaboutApproaches() {
+    auto isRoad = [&](int x, int y) {
+        const Tile& t = getTile(x, y);
+        return t.roadType != RoadType::NONE && t.roadType != RoadType::INTERSECTION;
+    };
+
+    for (auto& inter : intersections) {
+        if (inter.getType() != RegulationType::ROUNDABOUT) continue;
+
+        const auto& tiles = inter.getCoveredTiles();
+        if (tiles.empty()) continue;
+
+        // Bounding box de l'anneau.
+        int minX = tiles[0].x, maxX = tiles[0].x;
+        int minY = tiles[0].y, maxY = tiles[0].y;
+        for (const auto& t : tiles) {
+            minX = std::min(minX, t.x); maxX = std::max(maxX, t.x);
+            minY = std::min(minY, t.y); maxY = std::max(maxY, t.y);
+        }
+        const int cx = (minX + maxX) / 2;
+        const int cy = (minY + maxY) / 2;
+
+        // Une branche n'existe que si une vraie route touche ce cote.
+        inter.clearApproaches();
+        auto tryAdd = [&](Approach::Direction dir, int ex, int ey) {
+            if (!isRoad(ex, ey)) return;
+            Approach a; a.direction = dir; a.entryTile = {ex, ey};
+            inter.addApproach(a);
+        };
+        tryAdd(Approach::Direction::NORTH, cx,        minY - 1);
+        tryAdd(Approach::Direction::SOUTH, cx,        maxY + 1);
+        tryAdd(Approach::Direction::EAST,  maxX + 1,  cy);
+        tryAdd(Approach::Direction::WEST,  minX - 1,  cy);
+    }
+}
+
 const Intersection* World::getIntersectionNear(float worldX, float worldY, float radius) const {
     for (const auto& inter : intersections) {
         for (const auto& tile : inter.getCoveredTiles()) {
