@@ -72,7 +72,16 @@ Decision StopPolicy::request(const PolicyContext& ctx,
     const float stopLineGap  = std::max(0.f, distToCenter - interHalf - buffer);
 
     // Phase 1 : approche -> freine jusqu'a la ligne.
-    if (stopLineGap > 5.f) {
+    //
+    // IMPORTANT (couplage avec Vehicle::computeDecision) : ce seuil DOIT etre
+    // >= kHaltZone (16 px) du Vehicle. Sinon le Vehicle declenche son arret sec
+    // (stopForceHalt) ALORS qu'on est encore en phase 1 (canEnter toujours
+    // false, sans test de degagement) -> le vehicule se fige et ne repart
+    // jamais. En gardant la zone "a la ligne" plus large que kHaltZone, l'arret
+    // sec survient dans la phase 3 ci-dessous, qui evalue le degagement et
+    // libere des que l'axe principal est sur.
+    constexpr float kAtLineZone = 18.f;   // >= Vehicle kHaltZone (16)
+    if (stopLineGap > kAtLineZone) {
         d.canEnter    = false;
         d.shouldStop  = true;
         d.stopLineGap = stopLineGap;

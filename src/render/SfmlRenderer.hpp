@@ -5,6 +5,7 @@
 // Aucune autre classe du projet ne doit plus parler a SFML pour dessiner.
 #pragma once
 
+#include <SFML/Graphics/Font.hpp>
 #include <SFML/Graphics/RenderTarget.hpp>
 #include <SFML/Graphics/RenderTexture.hpp>
 #include <SFML/Graphics/Sprite.hpp>
@@ -23,6 +24,11 @@ public:
     void drawAgent(const IAgent& agent) override;
     void drawAgentDebug(const IAgent& agent) override;
 
+    // Overlay pedagogique : materialise SUR la simulation la decision courante
+    // de l'agent (anneau colore + label : CEDE / STOP / P2P / FEU / DOUBLE...).
+    // Concret a SfmlRenderer (hors interface) : appele a la demande par main.
+    void drawAgentDecision(const IAgent& agent);
+
     void drawBuildFootprint(int gridX, int gridY, int wTiles, int hTiles,
                             float tileSize, core::Color fill) override;
     void drawHoverHighlight(int gridX, int gridY, float tileSize) override;
@@ -37,6 +43,9 @@ private:
     sf::RenderTexture mapTexture_;
     sf::Sprite        mapSprite_;
     bool              mapCacheValid_ = false;
+
+    sf::Font          font_;
+    bool              fontLoaded_ = false;   // overlay texte degrade si false
 };
 
 } // namespace render

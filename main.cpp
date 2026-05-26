@@ -106,6 +106,7 @@ int main() {
 
     bool buildMode = false;
     bool showFlowDebug = false; // --- NOUVEAU : Variable d'état du bouton ---
+    bool showDecisions = false; // Overlay pedagogique des decisions sur la sim
     BuildTool currentTool = BuildTool::ROAD_CITY_50;
     int  roundaboutSide = 4;     // cote en tiles, PAIR (2,4,6,8). 2 = mini, 4 = anneau 4x4...
     bool isPaused = false;
@@ -386,6 +387,7 @@ int main() {
             for (auto& agent : agents) {
                 renderer.drawAgent(*agent);
                 renderer.drawAgentDebug(*agent);
+                if (showDecisions) renderer.drawAgentDecision(*agent);
             }
 
             // --- Apercu de construction (fantome + surbrillance de la tile) ---
@@ -524,6 +526,10 @@ int main() {
 
                 // --- NOUVEAU : La Checkbox pour activer la vision cyberpunk ---
                 ImGui::Checkbox("Afficher les Flux (Debug)", &showFlowDebug);
+
+                // Overlay pedagogique : montre la decision de CHAQUE vehicule
+                // (anneau colore + label CEDE/STOP/P2P/FEU/DOUBLE...) sur la sim.
+                ImGui::Checkbox("Afficher les decisions (overlay)", &showDecisions);
 
                 if (buildMode) {
                     ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "Outil de pose selectionne :");

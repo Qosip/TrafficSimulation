@@ -355,6 +355,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     bool leaderFromYield = false;
     bool leaderFromRed   = false;
     bool leaderFromStop  = false;
+    bool leaderFromP2P   = false;   // negociation P2P : Claim domine
     bool stopForceHalt   = false;   // arret FERME a la ligne d'un STOP
 
     const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
@@ -491,6 +492,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                         leaderFromRed = true;
                     } else if (interAhead->getType() == RegulationType::STOP) {
                         leaderFromStop = true;
+                    } else if (interAhead->getType() == RegulationType::P2P) {
+                        leaderFromP2P = true;
                     } else {
                         leaderFromYield = true;
                     }
@@ -515,6 +518,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         currentBlockReason = BlockReason::INTERSECTION_RED;
     } else if (leaderFromStop) {
         currentBlockReason = BlockReason::INTERSECTION_STOP;
+    } else if (leaderFromP2P) {
+        currentBlockReason = BlockReason::NEGOTIATING;
     } else if (leaderFromYield) {
         currentBlockReason = BlockReason::INTERSECTION_YIELD;
     } else if (leaderIsVehicle && pendingAccel < 0.f) {

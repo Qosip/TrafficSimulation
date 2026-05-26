@@ -6,6 +6,7 @@
 
 #include <SFML/Graphics/CircleShape.hpp>
 #include <SFML/Graphics/RectangleShape.hpp>
+#include <SFML/Graphics/Text.hpp>
 #include <SFML/Graphics/VertexArray.hpp>
 
 #include <algorithm>
@@ -24,7 +25,18 @@ namespace {
 constexpr float DEG2RAD = core::math::DEG2RAD;
 }
 
-SfmlRenderer::SfmlRenderer(sf::RenderTarget& target) : target_(target) {}
+SfmlRenderer::SfmlRenderer(sf::RenderTarget& target) : target_(target) {
+    // Police optionnelle pour les labels d'overlay. Plusieurs chemins candidats
+    // (cwd variable selon le mode de lancement). Echec -> overlay sans texte.
+    const char* candidates[] = {
+        "assets/Roboto-Regular.ttf",
+        "../assets/Roboto-Regular.ttf",
+        "Roboto-Regular.ttf",
+    };
+    for (const char* p : candidates) {
+        if (font_.loadFromFile(p)) { fontLoaded_ = true; break; }
+    }
+}
 
 void SfmlRenderer::rebuildMapCache(const World& world) {
     const int   gw = world.getGridWidth();
@@ -511,6 +523,51 @@ void SfmlRenderer::drawAgentDebug(const IAgent& agent) {
             pathLine[i].color    = sf::Color(147, 112, 219, 220);
         }
         target_.draw(pathLine);
+    }
+}
+
+void SfmlRenderer::drawAgentDecision(const IAgent& agent) {
+    using core::agent::BlockReason;
+    const BlockReason r = agent.getBlockReason();
+
+    sf::Color   col(180, 180, 180);
+    const char* label = nullptr;
+    switch (r) {
+        case BlockReason::AT_GOAL:            return;                                            // rien a montrer
+        case BlockReason::NONE:               col = sf::Color(60, 200, 90);   label = nullptr;   break;
+        case BlockReason::INTERSECTION_YIELD: col = sf::Color(255, 170, 0);   label = "CEDE";    break;
+        case BlockReason::INTERSECTION_STOP:  col = sf::Color(230, 40, 40);   label = "STOP";    break;
+        case BlockReason::NEGOTIATING:        col = sf::Color(60, 220, 180);  label = "P2P";     break;
+        case BlockReason::INTERSECTION_RED:   col = sf::Color(230, 40, 40);   label = "FEU";     break;
+        case BlockReason::LEADER_VEHICLE:     col = sf::Color(255, 120, 0);   label = "SUIT";    break;
+        case BlockReason::CORNERING:          col = sf::Color(90, 160, 255);  label = "VIRAGE";  break;
+        case BlockReason::OVERTAKING:         col = sf::Color(220, 80, 220);  label = "DOUBLE";  break;
+        case BlockReason::BREAKDOWN:          col = sf::Color(150, 20, 20);   label = "PANNE";   break;
+        case BlockReason::NO_PATH:            col = sf::Color(200, 0, 0);     label = "PERDU";   break;
+        case BlockReason::INITIALIZING:       col = sf::Color(200, 200, 200); label = "START";   break;
+    }
+
+    const core::Vec2 p = agent.getPosition();
+    const core::Vec2 b = agent.getBodySize();
+    const float ringR  = std::max(b.x, b.y) * 0.5f + 7.f;
+
+    sf::CircleShape ring(ringR);
+    ring.setOrigin(ringR, ringR);
+    ring.setPosition(p.x, p.y);
+    ring.setFillColor(sf::Color::Transparent);
+    ring.setOutlineColor(col);
+    ring.setOutlineThickness(2.f);
+    target_.draw(ring);
+
+    if (fontLoaded_ && label) {
+        sf::Text txt(label, font_, 11);
+        txt.setFillColor(col);
+        txt.setOutlineColor(sf::Color(0, 0, 0, 190));
+        txt.setOutlineThickness(2.f);
+        const sf::FloatRect bb = txt.getLocalBounds();
+        txt.setOrigin(bb.left + bb.width / 2.f, bb.top + bb.height / 2.f);
+        txt.setPosition(p.x, p.y - ringR - 9.f);
+        target_.draw(txt);
     }
 }
 
