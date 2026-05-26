@@ -7,6 +7,7 @@
 #include <memory>
 #include <iostream>
 #include <string>
+#include <algorithm>
 #include <cfloat>
 #include <cstddef>
 #include <cstdio>
@@ -19,6 +20,7 @@
 #include "core/agent/Vehicle.hpp"
 #include "core/metrics/MetricsCollector.hpp"
 #include "core/world/World.hpp"
+#include "sim/ExperimentRunner.hpp"
 #include "render/Camera.hpp"
 #include "core/pathfinding/AStarPlanner.hpp"
 #include "io/SceneBuilder.hpp"
@@ -92,6 +94,11 @@ int main() {
 
     // Banc d'essai quantitatif : collecte les metriques de recherche en direct.
     core::metrics::MetricsCollector metrics;
+
+    // Resultats de la derniere experience Monte-Carlo headless (Fixed vs P2P...).
+    std::vector<sim::ResultRow> expResults;
+    int expDurationSec = 60;
+    int expRuns        = 1;
 
     sf::Clock clock;
     sf::Clock deltaClock;
@@ -519,6 +526,71 @@ int main() {
                     ImGui::PopID();
                 }
                 ImGui::TextDisabled("Change le mode en direct (meme geometrie).");
+            }
+
+            // ---- Experience Monte-Carlo headless (test d'hypothese du rapport) ----
+            if (ImGui::CollapsingHeader("Experience Monte-Carlo")) {
+                ImGui::TextWrapped("Compare Priorite Fixe vs P2P sur un carrefour "
+                                   "isole, densite 0.1->0.8 v/s. Bloque l'UI le temps "
+                                   "du calcul (progression en console).");
+                ImGui::SliderInt("Duree mesure (s)", &expDurationSec, 20, 180);
+                ImGui::SliderInt("Runs / point", &expRuns, 1, 5);
+
+                if (ImGui::Button("Lancer (Fixed vs P2P)", ImVec2(-1.f, 30.f))) {
+                    sim::ExperimentConfig cfg;
+                    cfg.durationSec  = static_cast<float>(expDurationSec);
+                    cfg.runsPerPoint = expRuns;
+                    expResults = sim::ExperimentRunner::run(cfg, nullptr);
+                }
+
+                if (!expResults.empty()) {
+                    if (ImGui::BeginTable("expTable", 5,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+                        ImGui::TableSetupColumn("Strat");
+                        ImGui::TableSetupColumn("Dens");
+                        ImGui::TableSetupColumn("Debit");
+                        ImGui::TableSetupColumn("Delay");
+                        ImGui::TableSetupColumn("TTC");
+                        ImGui::TableHeadersRow();
+                        for (const auto& r : expResults) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::TextUnformatted(sim::ExperimentRunner::strategyName(r.strategy));
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.density);
+                            ImGui::TableNextColumn(); ImGui::Text("%.1f", r.throughputPerMin);
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.meanDelaySec);
+                            ImGui::TableNextColumn(); ImGui::Text("%.2f", r.minTTC);
+                        }
+                        ImGui::EndTable();
+                    }
+
+                    // Courbes par strategie : Delay vs densite + Debit vs densite.
+                    // Le croisement attendu materialise le point d'inflexion du rapport.
+                    std::vector<RegulationType> strats;
+                    for (const auto& r : expResults)
+                        if (std::find(strats.begin(), strats.end(), r.strategy) == strats.end())
+                            strats.push_back(r.strategy);
+
+                    for (RegulationType st : strats) {
+                        std::vector<float> delay, thr;
+                        for (const auto& r : expResults) if (r.strategy == st) {
+                            delay.push_back(r.meanDelaySec);
+                            thr.push_back(r.throughputPerMin);
+                        }
+                        char lab[64];
+                        std::snprintf(lab, sizeof(lab), "Delay %s", sim::ExperimentRunner::strategyName(st));
+                        ImGui::PlotLines(lab, delay.data(), static_cast<int>(delay.size()), 0,
+                                         nullptr, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
+                        std::snprintf(lab, sizeof(lab), "Debit %s", sim::ExperimentRunner::strategyName(st));
+                        ImGui::PlotLines(lab, thr.data(), static_cast<int>(thr.size()), 0,
+                                         nullptr, FLT_MAX, FLT_MAX, ImVec2(0.f, 45.f));
+                    }
+                    ImGui::TextDisabled("Axe X = densite croissante (0.1->0.8 v/s)");
+
+                    if (ImGui::Button("Exporter resultats CSV", ImVec2(-1.f, 26.f))) {
+                        std::string path = saveCsvDialog();
+                        if (!path.empty()) sim::ExperimentRunner::exportCsv(path, expResults);
+                    }
+                }
             }
 
             if (ImGui::CollapsingHeader("Palette d'Edition", ImGuiTreeNodeFlags_DefaultOpen)) {
