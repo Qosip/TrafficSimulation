@@ -550,14 +550,37 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
 
             // Composante de vitesse de l'autre le long de MON cap (croise -> ~0).
             const float oRad      = other->getHeading() * core::math::DEG2RAD;
-            const float oFwdSpeed = (std::cos(oRad) * fwd.x + std::sin(oRad) * fwd.y)
-                                    * other->getSpeed();
+            const core::Vec2 oFwd{ std::cos(oRad), std::sin(oRad) };
+            const float oFwdSpeed = (oFwd.x * fwd.x + oFwd.y * fwd.y) * other->getSpeed();
             const float closing   = std::max(currentSpeed - oFwdSpeed, 0.f);
 
             // Marge proportionnelle a la vitesse de rapprochement (plus de
             // distance de reaction quand ca ferme vite), bornee petit.
             const float margin = 6.f + 0.25f * closing;
             if (bumper >= margin) continue;                         // pas imminent
+
+            // --- Anti-DEADLOCK : conflit reciproque ? -------------------------
+            // Si 'other' m'a AUSSI dans son couloir d'avance, on est dans un
+            // conflit mutuel ou les DEUX freineraient l'un pour l'autre et se
+            // figeraient ("je le suis / il me suit"). On tranche par VIN : le
+            // plus PETIT VIN garde la priorite (ne cede pas), le plus grand cede.
+            // Ordre total -> aucun cycle possible. Un PUR suiveur (l'autre devant
+            // moi mais moi pas devant lui) freine toujours -> suivi de file et
+            // anti-collision en courbe (rond-point) preserves.
+            {
+                const core::Vec2 dpBA = position - other->getPosition();
+                const float otherForward = dpBA.x * oFwd.x + dpBA.y * oFwd.y;
+                const float otherLateral = std::abs(dpBA.x * (-oFwd.y) + dpBA.y * oFwd.x);
+                const float otherHalfWidth = other->getBodySize().y / 2.f;
+                const bool  mutual = (otherForward > 0.f) &&
+                                     (otherLateral <= otherHalfWidth + myHalfLen + 3.f);
+                if (mutual) {
+                    const int myV = getVehicleId();
+                    const int oV  = other->getVehicleId();
+                    const bool iHavePriority = (myV >= 0) && (oV < 0 || myV < oV);
+                    if (iHavePriority) continue;   // je passe ; l'autre cedera
+                }
+            }
 
             // Leader d'urgence : on retient le plus contraignant (plus petit gap).
             if (!leader.present || bumper < leader.gap) {

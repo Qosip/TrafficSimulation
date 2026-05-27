@@ -111,6 +111,62 @@ void buildCarFollowing(std::unique_ptr<World>& world, AgentVec& agents) {
         addCar(agents, *world, 18 - k * 3, 6, 50, 6, prof::calmDriver());
 }
 
+// Convoi de camions : demonstration du PLATOONING REEL (file rapprochee facon
+// CACC -- Cooperative Adaptive Cruise Control) face a un trafic conventionnel.
+//
+// Deux autoroutes paralleles, MEME nombre de camions, MEME depart, MEME
+// espacement initial. Seul change le couplage inter-vehiculaire :
+//   * voie HAUTE  : platoon CACC. Temps inter-vehiculaire court (camions
+//     connectes qui anticipent le freinage du leader) -> la file reste COMPACTE
+//     et avance en bloc. Interet : debit eleve (plus de camions/km), sillage
+//     aerodynamique (moins de trainee -> economie de carburant/CO2), flux lisse.
+//   * voie BASSE  : camions conventionnels. Grand intervalle de securite (temps
+//     de reaction humain) -> la file s'ETALE des le demarrage, debit plus faible.
+//
+// A observer : l'ecart entre vehicules et la longueur totale de chaque file ;
+// le panneau "Metriques" chiffre debit / vitesse moyenne sur l'ensemble.
+void buildTruckPlatoon(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    constexpr int W = 60, H = 16;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+
+    // Deux autoroutes 2 voies (seule la voie EST, RIGHT, est peuplee).
+    auto layHighway = [&](int yEast) {
+        for (int x = 0; x < W; ++x) {
+            w.setTile(x, yEast,     RoadType::HIGHWAY_130, TileDirection::RIGHT);
+            w.setTile(x, yEast - 1, RoadType::HIGHWAY_130, TileDirection::LEFT);
+        }
+    };
+    constexpr int yPlatoon = 5;     // voie HAUTE  (platoon CACC)
+    constexpr int yNormal  = 11;    // voie BASSE  (conventionnel)
+    layHighway(yPlatoon);
+    layHighway(yNormal);
+
+    // Platoon CACC : intervalle court (T ~0.5 s), reponse vive, cooperatif et
+    // fiable (vehicules connectes -> pas de panne dans cette demo).
+    Personality platoon = prof::truckDriver();
+    platoon.reactionTimeFactor    = 0.30f;   // T = 1.7 x 0.30 ~ 0.5 s (headway court)
+    platoon.minGapFactor          = 0.50f;   // s0 reduit
+    platoon.accelEagernessFactor  = 1.50f;   // cohesion : se recale vite sur le leader
+    platoon.comfortBrakeFactor    = 1.10f;
+    platoon.speedComplianceFactor = 1.00f;
+    platoon.overtakeWillingness   = 0.0f;    // on ne rompt jamais la formation
+    platoon.breakdownChancePerMin = 0.0f;
+
+    // Conventionnel : profil camion standard (grand intervalle de securite).
+    Personality normal = prof::truckDriver();
+    normal.breakdownChancePerMin  = 0.0f;    // pas de panne -> on compare le SEUL espacement
+
+    // Meme depart, meme nombre, meme espacement initial (3 tuiles) sur les 2 voies.
+    constexpr int kCount = 7;
+    for (int i = 0; i < kCount; ++i) {
+        const int sx = 2 + i * 3;
+        addTruck(agents, w, sx, yPlatoon, W - 2, yPlatoon, platoon);
+        addTruck(agents, w, sx, yNormal,  W - 2, yNormal,  normal);
+    }
+}
+
 // --- Un scenario par mode de regulation (4 voitures, une par branche) --------
 
 void buildModeDemo(std::unique_ptr<World>& world, AgentVec& agents,
@@ -310,6 +366,11 @@ std::vector<ScenarioDef> makeCatalog() {
     add("File / car-following (peloton IDM)", "Bases",
         "Camion lent en tete : la file se cale derriere a distance de securite (IDM).",
         buildCarFollowing);
+    add("Convoi de camions : platoon CACC vs conventionnel", "Bases",
+        "Deux files de 7 camions, meme depart. En HAUT un platoon CACC (intervalle "
+        "court, connecte) reste compact et flue ; en BAS des camions classiques "
+        "s'etalent. Montre l'interet du platooning : debit, sillage, flux lisse.",
+        buildTruckPlatoon);
 
     // --- Carrefour : modes de regulation ---
     add("Priorite a droite", "Carrefour - modes",

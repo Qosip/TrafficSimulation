@@ -97,6 +97,16 @@ if(TRAFFIC_BUILD_APP)
             ImGui-SFML::ImGui-SFML
     )
 
+    # Pas de fenetre console au lancement du .exe : sous-systeme WINDOWS (GUI).
+    # On conserve le point d'entree standard main() (pas de WinMain) via
+    # /ENTRY:mainCRTStartup -> aucune modification du code source necessaire.
+    if(WIN32)
+        set_target_properties(TrafficSimulation PROPERTIES WIN32_EXECUTABLE TRUE)
+        if(MSVC)
+            target_link_options(TrafficSimulation PRIVATE /ENTRY:mainCRTStartup)
+        endif()
+    endif()
+
     # Post-build : assets
     if(EXISTS ${CMAKE_SOURCE_DIR}/assets)
         add_custom_command(TARGET TrafficSimulation POST_BUILD

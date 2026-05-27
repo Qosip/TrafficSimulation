@@ -98,18 +98,34 @@ jobs:
           }
           $bin = "C:/SFML/SFML-2.6.1/bin"
           Copy-Item "$bin/sfml-graphics-2.dll","$bin/sfml-window-2.dll","$bin/sfml-system-2.dll" -Destination $out
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path "$out/*" -DestinationPath "dist/TrafficSimulation-windows-x64.zip" -Force
+          # Dossier de livraison (.exe + DLL + assets) = contenu final.
+          New-Item -ItemType Directory -Force dist/TrafficSimulation | Out-Null
+          Copy-Item "$out/*" -Destination dist/TrafficSimulation -Recurse -Force
+          # Le ZIP ne sert QU'A l'attachement de Release. L'artifact, lui, recoit
+          # le DOSSIER (upload-artifact le zippe une seule fois) -> plus de
+          # zip-dans-zip.
+          Compress-Archive -Path "dist/TrafficSimulation/*" -DestinationPath "dist/TrafficSimulation-windows-x64.zip" -Force
 
-      - name: Upload artifact
+      - name: Upload artifact (dossier -> un seul zip, pas de double archive)
         uses: actions/upload-artifact@v4
         with:
           name: TrafficSimulation-windows-x64
-          path: dist/TrafficSimulation-windows-x64.zip
+          path: dist/TrafficSimulation
           if-no-files-found: error
 
-      # Sur un tag v* : publie l'archive en Release GitHub.
-      - name: Publish release
+      # Push sur main : (re)publie une release "nightly" toujours a jour, visible
+      # sur la page Releases du depot -> le .exe est telechargeable directement.
+      - name: Publish nightly release (push main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "Nightly (dernier build de main)"
+          prerelease: true
+          files: dist/TrafficSimulation-windows-x64.zip
+
+      # Tag v* : release versionnee classique.
+      - name: Publish tagged release (tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
