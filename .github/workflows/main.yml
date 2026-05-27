@@ -165,7 +165,10 @@ jobs:
 
       - name: Coverage report (gcovr)
         run: |
-          gcovr --root . build --filter 'src/' \
+          # On exclut src/render/ : couche de PRESENTATION (SFML/OpenGL) qui
+          # exige un contexte graphique -> non testable sur un runner headless.
+          # La couverture mesure donc la LOGIQUE testable (moteur, policies, IO).
+          gcovr --root . build --filter 'src/' --exclude '.*/render/.*' \
                 --xml-pretty -o build/coverage.xml \
                 --html-details build/coverage.html \
                 --print-summary | tee build/coverage.txt

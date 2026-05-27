@@ -106,6 +106,33 @@ TEST(ScenarioCatalog, EveryScenarioBuildsAValidScene) {
     }
 }
 
+// Smoke test : fait TOURNER chaque scenario quelques secondes. Exerce toute la
+// chaine decisionnelle (perception, IDM/CACC, depassement, panne, filet
+// anti-collision) ET chaque policy de regulation (les scenarios "modes" couvrent
+// priorite/STOP/cedez/feux/priorite-fixe/P2P/AIM/peloton/ORCA/rond-point).
+// Aucun invariant verifie : on attrape les crash / acces invalides a l'echelle.
+TEST(ScenarioCatalog, EveryScenarioRunsBrieflyWithoutCrash) {
+    for (const auto& def : scene::scenarioCatalog()) {
+        std::unique_ptr<World> world;
+        AgentVec agents;
+        def.build(world, agents);
+        ASSERT_TRUE(world) << def.name;
+
+        for (int i = 0; i < 360 && !agents.empty(); ++i) {   // ~6 s simulees
+            world->updateIntersections(kDt);
+            for (auto& a : agents) if (a) a->computeDecision(agents, *world);
+            for (auto& a : agents) if (a) a->integrate(kDt);
+            agents.erase(std::remove_if(agents.begin(), agents.end(),
+                [](const std::unique_ptr<IAgent>& a) {
+                    if (!a) return true;
+                    const auto r = a->getBlockReason();
+                    return r == BlockReason::AT_GOAL || r == BlockReason::NO_PATH;
+                }), agents.end());
+        }
+        SUCCEED() << def.name;
+    }
+}
+
 TEST(ScenarioCatalog, ContainsOrcaOpenSpaceScenario) {
     const scene::ScenarioDef* def = findScenario("ORCA");
     ASSERT_NE(def, nullptr) << "Le scenario ORCA / espace ouvert doit etre au catalogue";
