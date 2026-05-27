@@ -13,6 +13,13 @@ namespace core::intersection {
 struct TrafficLightParams {
     float comfortDecel = 80.f;   // px/s^2  -- aligne sur IdmParams::bComf typique
     float buffer       = 25.f;   // px      -- marge avant la ligne d'arret
+
+    // --- Tourne-a-gauche non protege ---
+    // Sur ce carrefour les deux approches opposees partagent le meme vert : un
+    // tourne-a-GAUCHE croise le flux tout-droit d'en face et doit lui ceder.
+    float oncomingScan  = 220.f; // px -- rayon de detection de l'oncoming
+    float leftYieldTime = 2.5f;  // s  -- on cede si l'oncoming tout-droit atteint
+                                 //       le carrefour sous ce delai
 };
 
 class TrafficLightPolicy : public IIntersectionPolicy {

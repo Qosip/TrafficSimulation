@@ -476,9 +476,15 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // Keep clear : la BOITE + la sortie sur MA trajectoire sont-elles
             // degageables (aucun vehicule a l'ARRET dedans / juste apres) ? Sinon je
             // n'entre pas -> anti-gridlock + empeche un suiveur de se figer au milieu.
-            // Uniquement les regulations a ARRET (feux/STOP/priorite) ; les schemas
-            // qui s'entrelacent gerent leur debit. Borne dans le temps -> jamais de
-            // famine (passe le delai, on cede au bris de cycle VIN du filet).
+            // Regulations a ARRET (feux/STOP/priorite) : on surveille la BOITE +
+            // la sortie. Les schemas qui s'entrelacent gerent leur propre debit.
+            // ROND-POINT : meme garde anti-gridlock, mais la fenetre surveillee est
+            // la SEULE route de SORTIE (apres l'anneau), PAS l'arc lui-meme -- sinon
+            // on refuserait d'entrer pour tout vehicule circulant normalement sur
+            // l'anneau (= famine). Le vrai risque rond-point = sortie bouchee ->
+            // j'entre, je tourne, et je bloque l'anneau faute de pouvoir sortir.
+            // Borne dans le temps -> jamais de famine (passe le delai, on cede au
+            // bris de cycle VIN du filet).
             float sEnter = -1.f;
             bool  exitBlocked = false;
             {
@@ -487,11 +493,16 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     dtype == RegulationType::STOP           ||
                     dtype == RegulationType::FIXED_PRIORITY ||
                     dtype == RegulationType::PRIORITY_RIGHT ||
-                    dtype == RegulationType::YIELD;
+                    dtype == RegulationType::YIELD          ||
+                    dtype == RegulationType::ROUNDABOUT;
                 if (keepClearApplies) {
                     const float laneLen = currentLane->getLength();
                     float sExit = -1.f;
-                    for (float ds = 0.f; ds < 240.f; ds += tileSize * 0.25f) {
+                    // Rond-point : l'arc traverse de longues portions de lane DANS
+                    // l'anneau ; il faut aller plus loin pour trouver la sortie.
+                    const float scanReach =
+                        (dtype == RegulationType::ROUNDABOUT) ? 400.f : 240.f;
+                    for (float ds = 0.f; ds < scanReach; ds += tileSize * 0.25f) {
                         const float sp = std::min(s + ds, laneLen);
                         const core::Vec2 lp = currentLane->getPositionAt(sp);
                         const bool onI = (world.getIntersectionAt(lp.x, lp.y) != nullptr);
@@ -501,17 +512,43 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     }
                     if (sEnter >= 0.f && sExit > sEnter) {
                         const float need = getLength() + idm.params().s0 + 4.f;
+                        // Borne basse de la fenetre surveillee. Carrefour : depuis
+                        // l'ENTREE (on veut la boite ELLE-MEME degagee). Rond-point :
+                        // depuis la SORTIE seulement (on ignore l'arc circulant).
+                        const bool  isRoundabout = (dtype == RegulationType::ROUNDABOUT);
+                        const float blockFrom = isRoundabout ? sExit : sEnter;
+                        // Prefiltre de proximite. Carrefour compact : ancre sur
+                        // l'agent, rayon 250 px (comportement historique inchange).
+                        // Rond-point : la sortie est de l'autre cote de l'anneau
+                        // (>250 px de moi) -> ancre sur la FENETRE surveillee, rayon =
+                        // longueur de fenetre + marge (ecart lateral + carrosserie du
+                        // bloqueur), sinon un filtre centre sur moi raterait le bloqueur.
+                        const core::Vec2 winAnchor = isRoundabout
+                            ? currentLane->getPositionAt(std::min(blockFrom, laneLen))
+                            : position;
+                        const float winReach = isRoundabout
+                            ? (sExit + need - blockFrom) + 120.f
+                            : 250.f;
                         bool blocked = false;
                         for (const auto& other : agents) {
                             if (!other || other.get() == this) continue;
-                            if (other->getSpeed() > 35.f) continue;   // fluide -> pas un bouchon
-                            const core::Vec2 od = other->getPosition() - position;
-                            if (od.x * od.x + od.y * od.y > 250.f * 250.f) continue;
+                            // Bouchon = vehicule lent OU en train de s'arreter. Le
+                            // terme predictif (vitesse projetee sous l'horizon de
+                            // reaction) rattrape le vehicule encore >35 px/s mais qui
+                            // FREINE vers l'arret DANS la boite : sans lui, il etait
+                            // juge "fluide" -> j'entrais -> il s'arretait -> je me
+                            // figeais au milieu.
+                            constexpr float kReactHorizon = 0.6f;   // s
+                            const float predSpeed =
+                                other->getSpeed() + other->getCurrentAccel() * kReactHorizon;
+                            if (other->getSpeed() > 35.f && predSpeed > 35.f) continue;
+                            const core::Vec2 od = other->getPosition() - winAnchor;
+                            if (od.x * od.x + od.y * od.y > winReach * winReach) continue;
                             const LaneProjection pr =
-                                currentLane->project(other->getPosition(), sEnter, sExit + need);
+                                currentLane->project(other->getPosition(), blockFrom, sExit + need);
                             if (!pr.valid) continue;
                             if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
-                            if (pr.s >= sEnter && pr.s <= sExit + need) { blocked = true; break; }
+                            if (pr.s >= blockFrom && pr.s <= sExit + need) { blocked = true; break; }
                         }
                         constexpr float kFixedDt          = 1.f / 60.f;
                         constexpr float kKeepClearMaxWait = 4.f;
@@ -932,15 +969,18 @@ float Vehicle::getRemainingDistance() const {
 core::agent::TurnIntent Vehicle::getTurnIntent() const {
     // Classe la manoeuvre imminente en comparant le cap actuel au cap ~3 tiles
     // plus loin sur la trajectoire (couvre l'arc d'un virage de carrefour).
-    // |delta| faible -> tout droit ; sinon -> virage. Pas de distinction
-    // gauche/droite : la regle de dominance P2P ne la requiert pas.
+    // |delta| faible -> tout droit ; sinon le SIGNE du delta donne le sens.
     if (!currentLane || hasFinishedPath) return core::agent::TurnIntent::UNKNOWN;
     const float here  = currentLane->getHeadingAt(s);
     const float ahead = currentLane->getHeadingAt(
         std::min(s + tileSize * 3.f, currentLane->getLength()));
-    const float delta = std::abs(core::math::wrapDeg180(ahead - here));
-    return (delta < 30.f) ? core::agent::TurnIntent::STRAIGHT
-                          : core::agent::TurnIntent::TURNING;
+    const float delta = core::math::wrapDeg180(ahead - here);   // signe = sens
+    if (std::abs(delta) < 30.f) return core::agent::TurnIntent::STRAIGHT;
+    // Convention ecran : x+ = EST, y+ = SUD, cap croissant = horaire (0 E, 90 S,
+    // 180 O, 270 N). Un cap qui DECROIT (delta<0 : E->N, S->E, O->S, N->O) tourne
+    // vers la GAUCHE du conducteur ; qui croit -> DROITE.
+    return (delta < 0.f) ? core::agent::TurnIntent::LEFT
+                         : core::agent::TurnIntent::RIGHT;
 }
 
 // =================================================================

@@ -95,7 +95,7 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
     if (!ctx.others) { d.canEnter = true; return d; }
 
     const Vec2  center       = computeCenter(inter, ctx.tileSize);
-    const float interHalf    = ctx.tileSize;                 // demi-cote 2x2
+    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
     const float distToCenter = (center - ctx.self.position).length();
     const float bufferToLine = 25.f + ctx.self.length / 2.f;
     const float stopLineGap  = std::max(0.f, distToCenter - interHalf - bufferToLine);
@@ -114,7 +114,7 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
     const float myExit     = myEnter + myCross;
     const bool  myStopped  = ctx.self.speed <= params_.stoppedEps;
     const bool  myTurning  = (ctx.selfAgent &&
-                              ctx.selfAgent->getTurnIntent() == core::agent::TurnIntent::TURNING);
+                              core::agent::isTurning(ctx.selfAgent->getTurnIntent()));
     const int   myVin      = ctx.selfAgent ? ctx.selfAgent->getVehicleId() : -1;
     const Approach::Direction myFrom = ctx.self.from;
 
@@ -174,7 +174,7 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
 
         // --- Hierarchie de dominance VanMiddlesworth ---
         const bool oStopped = oSpeed <= params_.stoppedEps;
-        const bool oTurning = (other->getTurnIntent() == core::agent::TurnIntent::TURNING);
+        const bool oTurning = core::agent::isTurning(other->getTurnIntent());
         const int  oVin     = other->getVehicleId();
         if (oStopped && oVin >= 0) minStoppedVin = std::min(minStoppedVin, oVin);
 

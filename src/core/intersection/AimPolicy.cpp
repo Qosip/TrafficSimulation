@@ -40,7 +40,7 @@ Decision AimPolicy::request(const PolicyContext& ctx, const Intersection& inter)
     }
 
     const Vec2  center       = computeCenter(inter, ctx.tileSize);
-    const float interHalf    = ctx.tileSize;
+    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
     const float distToCenter = (center - ctx.self.position).length();
     const float bufferToLine = 25.f + ctx.self.length / 2.f;
     const float stopLineGap  = std::max(0.f, distToCenter - interHalf - bufferToLine);

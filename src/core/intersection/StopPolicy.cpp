@@ -66,7 +66,7 @@ Decision StopPolicy::request(const PolicyContext& ctx,
 
     // --- Axe secondaire : panneau STOP. ----------------------------------
     const Vec2  center       = computeCenter(inter, ctx.tileSize);
-    const float interHalf    = ctx.tileSize;
+    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
     const float distToCenter = (center - ctx.self.position).length();
     const float buffer       = 12.f + ctx.self.length / 2.f;
     const float stopLineGap  = std::max(0.f, distToCenter - interHalf - buffer);
