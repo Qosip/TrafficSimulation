@@ -27,6 +27,8 @@
 #include "sim/ExperimentRunner.hpp"
 #include "sim/Spawner.hpp"
 #include "sim/McLiveSession.hpp"
+#include "sim/ThreadPool.hpp"
+#include "sim/ParallelDecisions.hpp"
 #include "render/Camera.hpp"
 #include "core/pathfinding/AStarPlanner.hpp"
 #include "io/SceneBuilder.hpp"
@@ -119,6 +121,7 @@ int main() {
     bool expStratP2P    = true;
     bool expStratAim    = false;
     bool expStratPlatoon = false;
+    bool expStratOrca    = false;
 
     // --- Monte-Carlo (banc d'essai, ecran dedie) ---
     sim::McLiveSession mcLive;            // mode VISUEL : injection continue rendue
@@ -139,6 +142,16 @@ int main() {
 
     // RNG d'UI (heterogeneite gaussienne appliquee a la flotte a la demande).
     core::Rng uiRng(0xA11CEULL);
+
+    // --- Multithreading : pool persistant pour la phase de decision ---
+    // Cree une fois (workers idle en attente), reutilise a chaque sous-pas.
+    // Au-dela du seuil, computeDecision est reparti sur tous les coeurs ;
+    // en-deca, le surcout de synchro depasse le gain -> on reste sequentiel.
+    // NB : en parallele, l'attribution FCFS d'AIM n'est plus bit-deterministe
+    // (cf. ParallelDecisions.hpp) ; sans effet sur P2P/ORCA/autres (sans etat).
+    sim::ThreadPool simPool;
+    bool                  useMultithreading  = false;
+    constexpr std::size_t kParallelThreshold = 150;
 
     sf::Clock clock;
     sf::Clock deltaClock;
@@ -278,6 +291,7 @@ int main() {
         if (expStratP2P)        cfg.strategies.push_back(RegulationType::P2P);
         if (expStratAim)        cfg.strategies.push_back(RegulationType::AIM);
         if (expStratPlatoon)    cfg.strategies.push_back(RegulationType::VIRTUAL_PLATOON);
+        if (expStratOrca)       cfg.strategies.push_back(RegulationType::ORCA);
         if (expStratRoundabout) cfg.strategies.push_back(RegulationType::ROUNDABOUT);
         if (cfg.strategies.empty()) return;
 
@@ -554,11 +568,13 @@ int main() {
                 static const RegulationType vStrats[] = {
                     RegulationType::FIXED_PRIORITY, RegulationType::P2P,
                     RegulationType::AIM,            RegulationType::VIRTUAL_PLATOON,
+                    RegulationType::ORCA,
                     RegulationType::PRIORITY_RIGHT, RegulationType::STOP,
                     RegulationType::TRAFFIC_LIGHT,  RegulationType::ROUNDABOUT
                 };
                 static const char* vNames[] = {
                     "Priorite fixe", "P2P (VANET)", "AIM (reservation)", "Peloton virtuel",
+                    "ORCA (espace ouvert)",
                     "Priorite a droite", "STOP", "Feux", "Rond-point"
                 };
                 static int vIdx = 0;
@@ -595,7 +611,8 @@ int main() {
                 ImGui::Checkbox("Prio. Fixe", &expStratFixed);  ImGui::SameLine();
                 ImGui::Checkbox("P2P", &expStratP2P);           ImGui::SameLine();
                 ImGui::Checkbox("AIM", &expStratAim);           ImGui::SameLine();
-                ImGui::Checkbox("Peloton", &expStratPlatoon);
+                ImGui::Checkbox("Peloton", &expStratPlatoon);  ImGui::SameLine();
+                ImGui::Checkbox("ORCA", &expStratOrca);
                 ImGui::Checkbox("Rond-point", &expStratRoundabout);
                 if (expStratRoundabout) {
                     ImGui::SameLine();
@@ -678,7 +695,13 @@ int main() {
                     // Monte-Carlo visuel : injection continue de trafic stochastique.
                     if (mcLive.active()) mcLive.inject(*world, agents, FIXED_DT);
                     world->updateIntersections(FIXED_DT);
-                    for (auto& agent : agents) agent->computeDecision(agents, *world);
+                    // Phase 1 : decision. Parallelisee sur les coeurs au-dela du
+                    // seuil (grosses scenes type XXXXL) ; sequentielle sinon.
+                    if (useMultithreading && agents.size() >= kParallelThreshold)
+                        sim::computeDecisionsParallel(agents, *world, simPool);
+                    else
+                        for (auto& agent : agents) agent->computeDecision(agents, *world);
+                    // Phase 2 : integration (sequentielle, deterministe).
                     for (auto& agent : agents) agent->integrate(FIXED_DT);
                     metrics.sample(agents, FIXED_DT);   // banc d'essai : echantillonne l'etat a jour
                     simAccumulator -= FIXED_DT;
@@ -808,6 +831,10 @@ int main() {
                 ImGui::Separator();
                 ImGui::Checkbox("Pause Generale", &isPaused);
                 ImGui::SliderFloat("Vitesse Sim", &simSpeedFactor, 0.2f, 3.0f, "%.1fx");
+                ImGui::Separator();
+                ImGui::Checkbox("Multithreading (decisions)", &useMultithreading);
+                ImGui::TextDisabled("Pool : %u threads. Actif si >= %d agents.",
+                                    simPool.parallelism(), (int)kParallelThreshold);
             }
 
             // ---- Banc d'essai quantitatif (metriques de recherche) ----
@@ -853,11 +880,13 @@ int main() {
                     RegulationType::PRIORITY_RIGHT, RegulationType::STOP,
                     RegulationType::YIELD,          RegulationType::TRAFFIC_LIGHT,
                     RegulationType::FIXED_PRIORITY, RegulationType::P2P,
-                    RegulationType::AIM,            RegulationType::VIRTUAL_PLATOON
+                    RegulationType::AIM,            RegulationType::VIRTUAL_PLATOON,
+                    RegulationType::ORCA
                 };
                 static const char* regNames[] = {
                     "Priorite a droite", "STOP", "Cedez", "Feux",
-                    "Priorite fixe", "P2P (VANET)", "AIM (reservation)", "Peloton virtuel"
+                    "Priorite fixe", "P2P (VANET)", "AIM (reservation)", "Peloton virtuel",
+                    "ORCA (espace ouvert)"
                 };
                 const auto& inters = world->getIntersections();
                 for (std::size_t i = 0; i < inters.size(); ++i) {

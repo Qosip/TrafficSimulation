@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "core/intersection/IntersectionTypes.hpp"
@@ -45,6 +46,14 @@ private:
 
     // Wave 3 : la regulation effective vit dans la policy injectee.
     std::unique_ptr<core::intersection::IIntersectionPolicy> policy_;
+
+    // Multithreading : protege l'etat MUTABLE des policies (p.ex. la table de
+    // reservations d'AIM) quand plusieurs agents interrogent la MEME
+    // intersection depuis des threads de calcul differents (cf. computeDecisions
+    // parallelise). Un mutex PAR intersection -> aucune contention entre
+    // carrefours distincts. unique_ptr car std::mutex n'est ni copiable ni
+    // movable, alors qu'Intersection doit l'etre (stocke dans un std::vector).
+    mutable std::unique_ptr<std::mutex> reqMutex_;
 
 public:
     Intersection(int id, RegulationType type);

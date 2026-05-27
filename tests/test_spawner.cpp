@@ -84,7 +84,72 @@ TEST(Spawner, AllCarWeightProducesOnlyCars) {
     }
 }
 
+// Cas d'EXCEPTION : aucun chemin possible (destination hors reseau routier).
+// Le spawner doit renvoyer nullptr sans crash ni allocation d'agent orphelin.
 TEST(Spawner, UnreachableGoalReturnsNullptr) {
     World w = makeCrossWorld();
-    const auto origins = sic_unused : 0;  // placeholder (remplace ci-dessous)
+    const auto origins = sim::makeCrossroadOrigins(kG);
+
+    SpawnProfile p;
+    Spawner s(p, 99u);
+    // {0,0} est une tuile vide (hors des axes du carrefour) -> A* echoue.
+    auto v = s.spawn(w, origins[0].start, core::TileCoord{0, 0});
+    EXPECT_FALSE(v) << "Destination injoignable -> nullptr attendu";
+}
+
+// Cas d'EXCEPTION : depart hors reseau (tuile vide) -> egalement nullptr.
+TEST(Spawner, UnreachableStartReturnsNullptr) {
+    World w = makeCrossWorld();
+    Spawner s(SpawnProfile{}, 100u);
+    auto v = s.spawn(w, core::TileCoord{0, 0}, core::TileCoord{0, 1});
+    EXPECT_FALSE(v);
+}
+
+// =============================================================================
+// McLiveSession : conditions d'arret bornees (budget de vehicules / temps).
+// =============================================================================
+
+// BUDGET : avec maxSpawns = N, la session injecte EXACTEMENT N vehicules puis
+// cesse d'en creer (budgetExhausted) -- cas limite "saturation maitrisee".
+TEST(McLiveSession, BudgetSpawnsExactlyN) {
+    std::unique_ptr<World> w;
+    std::vector<std::unique_ptr<IAgent>> agents;
+    sim::McLiveSession mc;
+
+    constexpr int kBudget = 6;
+    mc.start(w, agents, RegulationType::FIXED_PRIORITY, /*density*/1.0f,
+             SpawnProfile{}, /*seed*/7u, /*maxSpawns*/kBudget, /*timeLimit*/0.f);
+
+    // Avance le temps simule jusqu'a epuisement du budget (garde-fou anti-boucle).
+    for (int i = 0; i < 200000 && !mc.budgetExhausted(); ++i)
+        mc.inject(*w, agents, kDt);
+
+    EXPECT_TRUE(mc.budgetExhausted());
+    EXPECT_EQ(mc.spawned(), kBudget) << "Le budget doit injecter EXACTEMENT N vehicules";
+
+    // Au-dela du budget, plus aucune injection.
+    const int before = mc.spawned();
+    for (int i = 0; i < 1000; ++i) mc.inject(*w, agents, kDt);
+    EXPECT_EQ(mc.spawned(), before);
+}
+
+// TEMPS : avec timeLimitSec = T, la session se declare terminee une fois T
+// secondes SIMULEES ecoulees.
+TEST(McLiveSession, TimeLimitReachedAfterDuration) {
+    std::unique_ptr<World> w;
+    std::vector<std::unique_ptr<IAgent>> agents;
+    sim::McLiveSession mc;
+
+    constexpr float kLimit = 2.0f;   // s simulees
+    mc.start(w, agents, RegulationType::P2P, /*density*/0.3f,
+             SpawnProfile{}, /*seed*/7u, /*maxSpawns*/0, /*timeLimit*/kLimit);
+
+    int steps = 0;
+    const int maxSteps = static_cast<int>((kLimit + 1.0f) / kDt);
+    while (!mc.timeLimitReached() && steps < maxSteps) {
+        mc.inject(*w, agents, kDt);
+        ++steps;
+    }
+    EXPECT_TRUE(mc.timeLimitReached());
+    EXPECT_GE(mc.elapsed(), kLimit);
 }

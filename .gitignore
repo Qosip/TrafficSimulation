@@ -25,3 +25,12 @@ out/
 *.dylib
 *.dll
 *.lib
+
+# =========================
+# Couverture / analyse
+# =========================
+*.gcda
+*.gcno
+coverage.*
+analysis/data/
+analysis/**/.ipynb_checkpoints/

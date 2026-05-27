@@ -50,6 +50,7 @@ const char* ExperimentRunner::strategyName(RegulationType t) {
         case RegulationType::P2P:            return "P2P";
         case RegulationType::AIM:            return "AIM";
         case RegulationType::VIRTUAL_PLATOON:return "VirtualPlatoon";
+        case RegulationType::ORCA:           return "ORCA";
     }
     return "?";
 }

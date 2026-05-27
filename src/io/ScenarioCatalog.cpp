@@ -160,6 +160,27 @@ void buildHighDensityP2P(std::unique_ptr<World>& world, AgentVec& agents) {
         spawnFourWay(agents, *world, c, prof::normalDriver(), D, /*stagger=*/false);
 }
 
+// ORCA / espace ouvert : un large carrefour SANS lignes directrices strictes
+// regule en evitement continu reciproque. ~10 vehicules convergent des quatre
+// branches a des distances etagees : ils ne s'arretent pas (sauf conflit
+// imminent) mais modulent leur vitesse pour s'entrelacer en continu. Met en
+// evidence le comportement de la policy ORCA face a une densite moderee.
+void buildOpenSpaceOrca(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    Cross c = makeCrossroad(world, RegulationType::ORCA);
+    World& w = *world;
+    const Personality p = prof::normalDriver();
+
+    // EST (row cy, +x) : 3 vehicules etages, tout droit.
+    for (int D : {12, 8, 5}) addCar(agents, w, c.cx - D, c.cy, c.W - 2, c.cy, p);
+    // OUEST (row cy-1, -x) : 3 vehicules etages, tout droit.
+    for (int D : {12, 8, 5}) addCar(agents, w, c.cx + D, c.cy - 1, 1, c.cy - 1, p);
+    // NORD (col cx, -y) : 2 vehicules etages, tout droit.
+    for (int D : {10, 6}) addCar(agents, w, c.cx, c.cy + D, c.cx, 1, p);
+    // SUD (col cx-1, +y) : 2 vehicules etages, tout droit.
+    for (int D : {10, 6}) addCar(agents, w, c.cx - 1, c.cy - D, c.cx - 1, c.H - 2, p);
+}
+
 void buildOvertake(std::unique_ptr<World>& world, AgentVec& agents) {
     agents.clear();
     world = std::make_unique<World>(60, 12, TS);
@@ -315,6 +336,11 @@ std::vector<ScenarioDef> makeCatalog() {
     add("Peloton virtuel", "Carrefour - modes",
         "Projection 1D + paires meneur-suiveur : passage entrelace sans arret.",
         mode(RegulationType::VIRTUAL_PLATOON));
+    add("ORCA / espace ouvert (~10 vehicules)", "Carrefour - modes",
+        "Large carrefour sans lignes directrices : ~10 vehicules naviguent par "
+        "evitement de collision CONTINU et reciproque, modulant leur vitesse pour "
+        "s'entrelacer plutot que de s'arreter.",
+        buildOpenSpaceOrca);
     add("Rond-point", "Carrefour - modes",
         "Anneau a sens unique legal : insertion en cedant aux vehicules sur l'anneau.",
         buildRoundaboutDemo);

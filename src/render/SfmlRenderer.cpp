@@ -363,6 +363,28 @@ void SfmlRenderer::drawIntersections(const World& world) {
                 }
                 break;
             }
+
+            case RegulationType::ORCA: {
+                // Espace ouvert : 8 plots disposes en cercle (pas de ligne
+                // directrice), evoquant un carrefour libre ou l'on navigue par
+                // evitement continu plutot que par voies imposees.
+                constexpr int kDots = 8;
+                for (int k = 0; k < kDots; ++k) {
+                    const float a = (static_cast<float>(k) / kDots) * core::math::TWO_PI;
+                    sf::CircleShape dot(2.5f);
+                    dot.setOrigin(2.5f, 2.5f);
+                    dot.setPosition(center.x + std::cos(a) * 13.f,
+                                    center.y + std::sin(a) * 13.f);
+                    dot.setFillColor(sf::Color(255, 170, 60, 220));
+                    target_.draw(dot);
+                }
+                sf::CircleShape hub(3.f);
+                hub.setOrigin(3.f, 3.f);
+                hub.setPosition(center);
+                hub.setFillColor(sf::Color(255, 170, 60));
+                target_.draw(hub);
+                break;
+            }
         }
     }
 }

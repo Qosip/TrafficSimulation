@@ -6,6 +6,7 @@
 #include "core/intersection/AimPolicy.hpp"
 #include "core/intersection/FixedPriorityPolicy.hpp"
 #include "core/intersection/IIntersectionPolicy.hpp"
+#include "core/intersection/OrcaPolicy.hpp"
 #include "core/intersection/P2PPolicy.hpp"
 #include "core/intersection/PlatooningPolicy.hpp"
 #include "core/intersection/PriorityRightPolicy.hpp"
@@ -28,6 +29,7 @@ makePolicyFor(RegulationType type) {
         case RegulationType::P2P:            return std::make_unique<P2PPolicy>();
         case RegulationType::AIM:            return std::make_unique<AimPolicy>();
         case RegulationType::VIRTUAL_PLATOON:return std::make_unique<PlatooningPolicy>();
+        case RegulationType::ORCA:           return std::make_unique<OrcaPolicy>();
         default:                             return std::make_unique<PriorityRightPolicy>();
     }
 }
@@ -35,7 +37,8 @@ makePolicyFor(RegulationType type) {
 } // namespace
 
 Intersection::Intersection(int id_, RegulationType type_)
-    : id(id_), type(type_), policy_(makePolicyFor(type_))
+    : id(id_), type(type_), policy_(makePolicyFor(type_)),
+      reqMutex_(std::make_unique<std::mutex>())
 {}
 
 Intersection::Intersection(Intersection&&) noexcept            = default;
@@ -47,7 +50,8 @@ Intersection::Intersection(const Intersection& o)
       lightTimer(o.lightTimer), currentPhase(o.currentPhase),
       greenDuration(o.greenDuration), orangeDuration(o.orangeDuration),
       stopMajorHorizontal_(o.stopMajorHorizontal_),
-      policy_(makePolicyFor(o.type))
+      policy_(makePolicyFor(o.type)),
+      reqMutex_(std::make_unique<std::mutex>())   // mutex propre (non copiable)
 {}
 
 Intersection& Intersection::operator=(const Intersection& o) {
@@ -62,6 +66,7 @@ Intersection& Intersection::operator=(const Intersection& o) {
     orangeDuration = o.orangeDuration;
     stopMajorHorizontal_ = o.stopMajorHorizontal_;
     policy_        = makePolicyFor(o.type);
+    if (!reqMutex_) reqMutex_ = std::make_unique<std::mutex>();
     return *this;
 }
 
@@ -107,7 +112,16 @@ LightState Intersection::getLightState(Approach::Direction dir) const {
 
 core::intersection::Decision
 Intersection::request(const core::intersection::PolicyContext& ctx) const {
-    if (policy_) return policy_->request(ctx, *this);
+    if (policy_) {
+        // Serialise les acces concurrents a l'etat mutable de CETTE policy
+        // (cout negligeable en mono-thread : mutex non contendu). reqMutex_ ne
+        // peut etre nul que sur une instance deplacee (jamais interrogee).
+        if (reqMutex_) {
+            std::lock_guard<std::mutex> lock(*reqMutex_);
+            return policy_->request(ctx, *this);
+        }
+        return policy_->request(ctx, *this);
+    }
     core::intersection::Decision d;
     d.canEnter = true;
     return d;

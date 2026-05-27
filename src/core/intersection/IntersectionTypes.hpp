@@ -19,6 +19,7 @@ enum class RegulationType {
     P2P,              // Negociation pair-a-pair decentralisee (VanMiddlesworth)
     AIM,              // Gestion centralisee par reservation (Dresner & Stone)
     VIRTUAL_PLATOON,  // Peloton virtuel : projection 1D + paires meneur-suiveur
+    ORCA,             // Espace ouvert : evitement continu reciproque (van den Berg)
 };
 
 struct Approach {

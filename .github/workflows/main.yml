@@ -1,0 +1,199 @@
+name: CI
+
+# Pipeline d'integration continue du simulateur de trafic multi-agents (C++/CMake).
+#   Job 1 (tests)    : compile simcore + la suite GoogleTest, lance ctest.        (Linux)
+#   Job 2 (build)    : compile l'executable GUI standalone (.exe) et le publie
+#                      en artifact ; sur un tag v* -> Release GitHub.             (Windows)
+#   Job 3 (metrics)  : couverture de tests (gcovr) + benchmark de performance,
+#                      resume dans le GitHub Step Summary du build.               (Linux)
+#
+# Note d'architecture (rapport de recherche) : le job 'report' ci-dessous est un
+# squelette desactive. Une fois des notebooks ajoutes dans analysis/, il les
+# executera (papermill/nbconvert), generera les plots et publiera un rapport
+# stylise sur GitHub Pages. La structure du depot (analysis/, simbench headless,
+# export CSV des metriques) est deja prete pour ce branchement.
+
+on:
+  push:
+    branches: [ main ]
+    tags:     [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+# Annule les runs obsoletes sur une meme ref (push successifs).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # JOB 1 : Tests unitaires (GoogleTest + ctest)
+  # ===========================================================================
+  tests:
+    name: Unit tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SFML + build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libsfml-dev
+
+      # GUI desactivee (-DTRAFFIC_BUILD_APP=OFF) : les tests n'ont besoin que de
+      # simcore + simtests, on evite ImGui/OpenGL sur le runner.
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DTRAFFIC_BUILD_APP=OFF
+          -DTRAFFIC_BUILD_TESTS=ON
+
+      - name: Build (simcore + simtests + simbench)
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+  # ===========================================================================
+  # JOB 2 : Executable standalone Windows (.exe) -> artifact / release
+  # ===========================================================================
+  build-windows:
+    name: Standalone .exe (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: write   # requis pour publier la Release sur un tag v*
+    steps:
+      - uses: actions/checkout@v4
+
+      # SFML via vcpkg (preinstalle sur les runners GitHub Windows). Le toolchain
+      # vcpkg active aussi le deploiement automatique des DLL a cote du .exe.
+      - name: Install SFML (vcpkg)
+        run: vcpkg install sfml:x64-windows
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DTRAFFIC_BUILD_APP=ON
+          -DTRAFFIC_BUILD_TESTS=OFF
+
+      - name: Build (Release)
+        run: cmake --build build --config Release --parallel
+
+      # Le post-build CMake copie deja assets/ a cote du .exe ; le toolchain
+      # vcpkg copie les DLL SFML. On empaquette tout le dossier de sortie.
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "build/Release"
+          if (-not (Test-Path "$out/TrafficSimulation.exe")) {
+            Write-Error "Executable introuvable dans $out"; exit 1
+          }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$out/*" -DestinationPath "dist/TrafficSimulation-windows-x64.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrafficSimulation-windows-x64
+          path: dist/TrafficSimulation-windows-x64.zip
+          if-no-files-found: error
+
+      # Sur un tag v* : publie l'archive en Release GitHub.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/TrafficSimulation-windows-x64.zip
+
+  # ===========================================================================
+  # JOB 3 : Couverture de tests + metriques de performance -> Step Summary
+  # ===========================================================================
+  metrics:
+    name: Coverage + performance (Linux)
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SFML + gcovr
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libsfml-dev gcovr
+
+      - name: Configure (coverage)
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DTRAFFIC_BUILD_APP=OFF
+          -DTRAFFIC_BUILD_TESTS=ON
+          -DTRAFFIC_COVERAGE=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests (collect coverage)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Coverage report (gcovr)
+        run: |
+          gcovr --root . build --filter 'src/' \
+                --xml-pretty -o build/coverage.xml \
+                --html-details build/coverage.html \
+                --print-summary | tee build/coverage.txt
+
+      - name: Performance benchmark
+        run: ./build/simbench 12 1 | tee build/bench.txt
+
+      - name: Write Step Summary
+        run: |
+          {
+            echo "## TrafficSimulation — metrics"
+            echo ""
+            echo "### Test coverage (src/)"
+            echo '```'
+            grep -E 'lines:|functions:|branches:' build/coverage.txt || cat build/coverage.txt
+            echo '```'
+            echo ""
+            echo "### Engine performance (headless benchmark)"
+            echo '```'
+            grep '^BENCH ' build/bench.txt
+            echo '```'
+            speed=$(grep '^BENCH speedup_x_realtime=' build/bench.txt | cut -d= -f2)
+            echo ""
+            echo "**Moteur : ${speed}x temps reel** (secondes simulees / seconde de calcul)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: build/coverage.html
+          if-no-files-found: warn
+
+  # ===========================================================================
+  # JOB 4 (SQUELETTE, desactive) : rapport de recherche -> GitHub Pages
+  # ===========================================================================
+  # Active ce job quand des notebooks existent dans analysis/. Il executera les
+  # notebooks (plots a partir des CSV exportes par simbench / MetricsCollector)
+  # et publiera un rapport HTML sur GitHub Pages.
+  #
+  # report:
+  #   name: Research report (GitHub Pages)
+  #   runs-on: ubuntu-latest
+  #   needs: metrics
+  #   permissions:
+  #     pages: write
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with: { python-version: '3.12' }
+  #     - run: pip install -r analysis/requirements.txt
+  #     - run: jupyter nbconvert --to html --execute analysis/*.ipynb --output-dir site/
+  #     - uses: actions/upload-pages-artifact@v3
+  #       with: { path: site/ }
+  #     - uses: actions/deploy-pages@v4
