@@ -300,7 +300,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         }
     }
 
-    lastPerception = Perception::scan(position, currentAngle, this, agents, world, visionParams);
+    lastPerception = Perception::scan(position, currentAngle, this, agents, world,
+                                      visionParams, currentLane.get(), s);
 
     // --- v0 : desired speed clamp ---
     // speedComplianceFactor > 1 = agent depasse la limitation (perso pressee).
@@ -357,6 +358,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     bool leaderFromStop  = false;
     bool leaderFromP2P   = false;   // negociation P2P : Claim domine
     bool leaderFromPlatoon = false; // peloton virtuel : meneur projete mobile
+    bool leaderFromBox   = false;   // anti-gridlock : sortie de carrefour occupee
     bool stopForceHalt   = false;   // arret FERME a la ligne d'un STOP
 
     const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
@@ -404,20 +406,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             ctx.tileSize      = tileSize;
             ctx.others        = &agents;
 
-            // Si l'agent est physiquement engage (carrosserie deja sur la
-            // ligne d'arret), on force le passage : freiner ici provoquerait
-            // un arret AU MILIEU du carrefour et bloquerait les flux croises.
-            // EXCEPTION : a un STOP non encore libere, on ne s'auto-engage PAS
-            // (sinon on franchirait le stop sans s'arreter).
-            const bool  isStopAhead = (interAhead->getType() == RegulationType::STOP);
-            const bool  stopDone     = isStopAhead &&
-                                       currentStopIntersectionId == interAhead->getId() &&
-                                       stopReleased;
-            const float engagedThreshold = ctx.self.length / 2.f + 10.f;
-            if (distToInter < engagedThreshold && (!isStopAhead || stopDone)) {
-                isCommittedToPass       = true;
-                committedIntersectionId = interAhead->getId();
-            }
+            const bool isStopAhead = (interAhead->getType() == RegulationType::STOP);
 
             const auto decision = interAhead->request(ctx);
 
@@ -466,12 +455,27 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 canPass = stopReleased;
             }
 
-            if (canPass ||
-                (isCommittedToPass && committedIntersectionId == interAhead->getId())) {
-                if (distToInter < 60.f) {
-                    isCommittedToPass       = true;
-                    committedIntersectionId = interAhead->getId();
-                }
+            // Zone de DILEMME : puis-je encore m'arreter AVANT la ligne, meme en
+            // freinage d'urgence ? Si NON, je dois m'engager (freiner stopperait ma
+            // carrosserie EN PLEIN carrefour). Si OUI, je RESPECTE le signal, quitte
+            // a freiner ferme -> aucun franchissement de feu rouge "alors qu'on avait
+            // le temps" (c'etait le bug : un commit aveugle a ~25 px ignorait le
+            // rouge). Le commit n'est PAS pose sur vert : interOn le posera une fois
+            // physiquement sur l'aire (garantit qu'on degage un carrefour entame).
+            const float v            = std::max(0.f, currentSpeed);
+            const float bEmergency   = idm.params().bComf * 2.f;
+            const float brakingDistE = (v * v) / (2.f * std::max(1.f, bEmergency));
+            const float gapToLine    = std::max(0.f, distToInter - ctx.self.length / 2.f);
+            const bool  cannotStop   = brakingDistE > gapToLine;
+            const bool  alreadyCommitted =
+                isCommittedToPass && committedIntersectionId == interAhead->getId();
+
+            if (canPass) {
+                // Voie libre (vert / gap accepte) : on roule.
+            } else if (alreadyCommitted || (cannotStop && !isStopAhead)) {
+                // Point de non-retour franchi : on passe (jamais pour un STOP).
+                isCommittedToPass       = true;
+                committedIntersectionId = interAhead->getId();
             } else if (stopForceHalt) {
                 // Arret ferme PILE a la ligne : leader virtuel colle (gap 0).
                 leader            = core::behavior::LeaderInfo{};
@@ -515,6 +519,56 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     leader            = vlead;
                     leaderIsVehicle   = false;
                     leaderFromPlatoon = true;
+                }
+            }
+
+            // --- Anti-GRIDLOCK : "keep clear" / ne pas bloquer le carrefour ----
+            // Un carrefour sature degenere en blocage mutuel (spillback) quand des
+            // vehicules s'engagent alors que leur SORTIE est deja pleine : ils se
+            // figent SUR l'aire de conflit et verrouillent les flux croises. Regle
+            // du code de la route ("ne pas s'engager si on ne peut pas degager") :
+            // si un vehicule LENT occupe ma voie juste APRES le carrefour, je
+            // m'arrete a la LIGNE plutot qu'au milieu. Sauf si je suis deja engage
+            // (committed) : reculer la dedans empirerait le blocage.
+            // N.B. : n'AJOUTE que du freinage (leader plus contraignant) -> sur.
+            if (currentLane && !isCommittedToPass && overtakeState == OvertakeState::NONE) {
+                const float laneLen = currentLane->getLength();
+                // Abscisses d'ENTREE et de SORTIE du carrefour sur ma trajectoire.
+                float sEnter = -1.f, sExit = -1.f;
+                for (float ds = 0.f; ds < 240.f; ds += tileSize * 0.25f) {
+                    const float sp = std::min(s + ds, laneLen);
+                    const core::Vec2 lp = currentLane->getPositionAt(sp);
+                    const bool onInter = (world.getIntersectionAt(lp.x, lp.y) != nullptr);
+                    if (sEnter < 0.f && onInter) sEnter = sp;
+                    else if (sEnter >= 0.f && !onInter) { sExit = sp; break; }
+                    if (sp >= laneLen) break;
+                }
+                if (sEnter >= 0.f && sExit > sEnter) {
+                    const float need = getLength() + idm.params().s0 + 4.f; // place a degager
+                    bool blocked = false;
+                    for (const auto& other : agents) {
+                        if (!other || other.get() == this) continue;
+                        if (other->getSpeed() > 35.f) continue;       // fluide -> pas un bouchon
+                        const LaneProjection pr =
+                            currentLane->project(other->getPosition(), sExit, sExit + need);
+                        if (!pr.valid) continue;
+                        if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
+                        if (pr.s >= sExit - 1.f && pr.s <= sExit + need) { blocked = true; break; }
+                    }
+                    if (blocked) {
+                        core::behavior::LeaderInfo box;
+                        box.present    = true;
+                        box.gap        = std::max((sEnter - s) - getLength() / 2.f, 0.f);
+                        box.speed      = 0.f;
+                        box.stopTarget = true;             // ligne FIXE -> arret net
+                        if (!leader.present || box.gap < leader.gap) {
+                            leader          = box;
+                            leaderIsVehicle = false;
+                            leaderFromBox   = true;
+                            // On annule un eventuel commit premature : on attend.
+                            isCommittedToPass = false;
+                        }
+                    }
                 }
             }
         }
@@ -571,7 +625,13 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // paires (c'etait la limite de la version precedente).
             const float headingDiff =
                 std::abs(core::math::wrapDeg180(other->getHeading() - currentAngle));
-            if (headingDiff >= 45.f) {                       // pas un suivi de file
+            // En DEPASSEMENT, un vehicule quasi-oppose (>135°) est un FRONTAL sur
+            // la voie d'en face : l'ordre par VIN ne s'y applique pas (un frontal
+            // ne se "negocie" pas). Je freine TOUJOURS -> jamais de collision tete-
+            // a-queue pendant un double rate (criticite de securite MOBIL b_safe).
+            const bool overtakeHeadOn =
+                (overtakeState != OvertakeState::NONE) && (headingDiff > 135.f);
+            if (headingDiff >= 45.f && !overtakeHeadOn) {    // pas un suivi de file
                 const int myV = getVehicleId();
                 const int oV  = other->getVehicleId();
                 const bool otherHasPriority = (oV >= 0) && (myV < 0 || oV < myV);
@@ -636,6 +696,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         currentBlockReason = BlockReason::NEGOTIATING;
     } else if (leaderFromPlatoon) {
         currentBlockReason = BlockReason::PLATOONING;
+    } else if (leaderFromBox) {
+        currentBlockReason = BlockReason::KEEP_CLEAR;
     } else if (leaderFromYield) {
         currentBlockReason = BlockReason::INTERSECTION_YIELD;
     } else if (leaderIsVehicle && pendingAccel < 0.f) {
@@ -948,11 +1010,17 @@ bool Vehicle::isOncomingLaneFree(
             core::math::wrapDeg180(other->getHeading() - currentAngle));
         if (diffHeading < 135.f) continue;
 
-        // Si oncoming va vite, le temps de collision se reduit.
+        // Critere de securite MOBIL adapte au depassement bidirectionnel.
+        // Le "nouveau suiveur" pertinent est le vehicule en sens INVERSE : la
+        // manoeuvre n'est sure que s'il n'aurait PAS a freiner plus fort que
+        // b_safe pour eviter le frontal, ET qu'il reste une marge temporelle.
         const float closingSpeed = std::max(currentSpeed + other->getSpeed(), 30.f);
         const float ttc = forwardDist / closingSpeed;
-        // On veut ≥ 4s pour rentrer en securite.
-        if (ttc < 4.0f) return false;
+        if (ttc < 4.0f) return false;                       // marge temporelle mini
+        // Deceleration que l'oncoming devrait subir pour s'arreter avant l'impact.
+        const float reqDecel = (closingSpeed * closingSpeed) / (2.f * std::max(forwardDist, 1.f));
+        const float bSafe    = idm.params().bComf * 2.0f;   // freinage d'urgence tolere
+        if (reqDecel > bSafe) return false;
     }
     return true;
 }

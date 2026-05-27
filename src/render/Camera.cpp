@@ -2,7 +2,7 @@
 #include "render/Camera.hpp"
 
 Camera::Camera(float centerX, float centerY, float viewWidth, float viewHeight)
-    : moveSpeed(500.f), zoomLevel(1.f), minZoom(0.25f), maxZoom(4.f), zoomStep(1.15f),
+    : moveSpeed(500.f), zoomLevel(1.f), minZoom(0.25f), maxZoom(20.f), zoomStep(1.15f),
       baseWidth(viewWidth), baseHeight(viewHeight), isDragging(false)
 {
     view.setSize(viewWidth, viewHeight);

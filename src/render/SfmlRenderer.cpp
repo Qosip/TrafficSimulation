@@ -608,6 +608,7 @@ void SfmlRenderer::drawAgentDecision(const IAgent& agent) {
         case BlockReason::BREAKDOWN:          col = sf::Color(150, 20, 20);   label = "PANNE";   break;
         case BlockReason::NO_PATH:            col = sf::Color(200, 0, 0);     label = "PERDU";   break;
         case BlockReason::INITIALIZING:       col = sf::Color(200, 200, 200); label = "START";   break;
+        case BlockReason::KEEP_CLEAR:         col = sf::Color(255, 215, 0);   label = "DEGAGE";  break;
     }
 
     const core::Vec2 p = agent.getPosition();

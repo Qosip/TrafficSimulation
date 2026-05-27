@@ -283,13 +283,14 @@ void buildBreakdown(std::unique_ptr<World>& world, AgentVec& agents) {
 
 void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
     agents.clear();
-    constexpr int N = 64;
+    constexpr int N = 80;
     world = std::make_unique<World>(N, N, TS);
     World& w = *world;
 
-    // Maillage regulier : 8 axes H + 8 axes V (espacement 8 tiles) -> 64
-    // carrefours, tous mode confondus pour montrer l'heterogeneite.
-    const int lines[8] = {4, 12, 20, 28, 36, 44, 52, 60};
+    // Maillage regulier : 10 axes H + 10 axes V (espacement 8 tiles) -> 100
+    // carrefours, tous modes confondus pour montrer l'heterogeneite et tester
+    // la scalabilite (>1000 agents) + l'anti-gridlock a grande echelle.
+    const int lines[10] = {4, 12, 20, 28, 36, 44, 52, 60, 68, 76};
     for (int r : lines) buildHRoad(w, r, 0, N - 1);
     for (int c : lines) buildVRoad(w, c, 0, N - 1);
 
@@ -318,7 +319,7 @@ void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
     std::unordered_set<long long> usedStart;
     auto key = [N](core::TileCoord t) { return (long long)t.y * N + t.x; };
 
-    constexpr int kTargetVehicles = 260;
+    constexpr int kTargetVehicles = 1000;
     int spawned = 0, guard = 0;
     while (spawned < kTargetVehicles && guard < kTargetVehicles * 12) {
         ++guard;
@@ -439,9 +440,12 @@ std::vector<ScenarioDef> makeCatalog() {
         "16 carrefours (feux / priorite / STOP) + grand rond-point central, "
         "depassements et convois : panorama general des comportements.",
         [](std::unique_ptr<World>& w, AgentVec& a) { buildDemoScenario(w, a, TS); });
-    add("Ville XXXXL (~260 vehicules)", "Massif",
-        "64 carrefours tous modes confondus, plusieurs centaines de vehicules : "
-        "demonstration de scalabilite (le chargement peut prendre 1-2 s).",
+    add("Ville XXXXL (~1000 vehicules)", "Massif",
+        "100 carrefours (grille 80x80) tous modes confondus, ~1000 vehicules "
+        "actifs : demonstration de scalabilite (multithreading + partitionnement "
+        "spatial) et de l'anti-gridlock 'keep clear'. Le chargement (calcul des "
+        "trajets A*) peut prendre quelques secondes ; dezoomez a la molette pour "
+        "embrasser toute la ville.",
         buildCityXXXXL);
 
     return cat;

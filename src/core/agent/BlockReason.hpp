@@ -21,6 +21,7 @@ enum class BlockReason {
     PLATOONING,           // Peloton virtuel : suit un meneur projete (zipping)
     BREAKDOWN,            // En panne (timer)
     OVERTAKING,           // En manoeuvre de depassement
+    KEEP_CLEAR,           // Anti-gridlock : sortie occupee -> on ne s'engage pas
 };
 
 inline const char* toString(BlockReason r) {
@@ -38,6 +39,7 @@ inline const char* toString(BlockReason r) {
         case BlockReason::PLATOONING:         return "Peloton virtuel";
         case BlockReason::BREAKDOWN:          return "En panne";
         case BlockReason::OVERTAKING:         return "Depassement en cours";
+        case BlockReason::KEEP_CLEAR:         return "Sortie bloquee (anti-gridlock)";
     }
     return "?";
 }

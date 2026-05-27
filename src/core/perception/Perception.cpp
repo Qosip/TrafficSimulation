@@ -6,6 +6,7 @@
 
 #include "core/agent/IAgent.hpp"
 #include "core/math/Constants.hpp"
+#include "core/world/Lane.hpp"
 #include "core/world/World.hpp"
 
 PerceptionResult Perception::scan(
@@ -14,9 +15,13 @@ PerceptionResult Perception::scan(
     const IAgent* myself,
     const std::vector<std::unique_ptr<IAgent>>& agents,
     const World& world,
-    const VisionParams& params)
+    const VisionParams& params,
+    const Lane* myLane,
+    float       myS)
 {
     PerceptionResult result;
+
+    const float myHalfLength = myself->getLength() / 2.f;
 
     // --- 1. Scan des agents ---
     for (const auto& agent : agents) {
@@ -29,28 +34,52 @@ PerceptionResult Perception::scan(
 
         const float angleToOther = std::atan2(diff.y, diff.x) * core::math::RAD2DEG;
         const float relAngle     = core::math::wrapDeg180(angleToOther - myHeadingDeg);
-        if (std::abs(relAngle) > params.halfAngleDeg) continue;
 
-        DetectedObject obj;
-        obj.agent         = agent.get();
-        obj.type          = DetectedType::VEHICLE;
-        obj.distance      = dist;
-        obj.relativeAngle = relAngle;
-        obj.position      = otherPos;
-        result.detected.push_back(obj);
+        // Cone large : alimente la liste "detected" (visualisation debug).
+        if (std::abs(relAngle) <= params.halfAngleDeg) {
+            DetectedObject obj;
+            obj.agent         = agent.get();
+            obj.type          = DetectedType::VEHICLE;
+            obj.distance      = dist;
+            obj.relativeAngle = relAngle;
+            obj.position      = otherPos;
+            result.detected.push_back(obj);
+        }
 
-        // Cone etroit : candidat "obstacle direct devant".
-        if (std::abs(relAngle) <= params.directHalfAngle) {
-            // Filtre same-direction : on n'accepte comme leader qu'un vehicule
-            // dont le heading est proche du notre (memes lanes / meme sens).
-            const float otherHeading = agent->getHeading();
-            const float headingDiff  = std::abs(core::math::wrapDeg180(otherHeading - myHeadingDeg));
-            if (headingDiff > params.sameLaneHeadingTol) continue;
+        // Garde-fou same-direction : un leader roule globalement dans mon sens.
+        const float headingDiff =
+            std::abs(core::math::wrapDeg180(agent->getHeading() - myHeadingDeg));
+        if (headingDiff > params.sameLaneHeadingTol) continue;
 
-            const float myHalfLength    = myself->getLength() / 2.f;
-            const float otherHalfLength = agent->getLength()  / 2.f;
-            const float bumperDist      = std::max(0.f, dist - myHalfLength - otherHalfLength);
+        const float otherHalfLength = agent->getLength() / 2.f;
 
+        if (myLane) {
+            // --- Selection par PROJECTION DE FRENET (Wave 7) ---
+            // On projette l'autre sur MA trajectoire dans la fenetre devant moi.
+            // Leader valide ssi : pied AHEAD (s > myS), DANS le couloir de ma voie
+            // (|lateral| petit -> rejette contre-sens / voie croisee), gap mesure
+            // le long du tracé. Independant de tout cone angulaire -> robuste en
+            // virage et a l'approche d'intersection.
+            const LaneProjection proj =
+                myLane->project(otherPos, myS, myS + params.range);
+            if (!proj.valid) continue;
+            if (std::abs(proj.lateral) > params.laneCorridorHalf) continue;
+            const float along = proj.s - myS;          // distance le long du tracé
+            if (along <= 0.f) continue;                // derriere moi sur la voie
+
+            const float bumperDist =
+                std::max(0.f, along - myHalfLength - otherHalfLength);
+            if (!result.hasDirectObstacle || bumperDist < result.directObstacleDistance) {
+                result.hasDirectObstacle      = true;
+                result.directObstacleDistance = bumperDist;
+                result.directObstacleSpeed    = agent->getSpeed();
+                result.directObstacleAgent    = agent.get();
+            }
+        } else {
+            // --- Repli : ancien cone etroit (pas de trajectoire fournie) ---
+            if (std::abs(relAngle) > params.directHalfAngle) continue;
+            const float bumperDist =
+                std::max(0.f, dist - myHalfLength - otherHalfLength);
             if (!result.hasDirectObstacle || bumperDist < result.directObstacleDistance) {
                 result.hasDirectObstacle      = true;
                 result.directObstacleDistance = bumperDist;
