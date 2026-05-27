@@ -72,8 +72,11 @@ jobs:
       - name: Download SFML 2.6.1 (MSVC vc17, 64-bit)
         shell: pwsh
         run: |
-          $url = "https://www.sfml-dev.org/files/SFML-2.6.1-windows-vc17-64-bit.zip"
-          Invoke-WebRequest -Uri $url -OutFile sfml.zip
+          # Telechargement depuis GitHub Releases (CDN fiable depuis les runners ;
+          # sfml-dev.org timeout regulierement). Memes binaires officiels.
+          $url = "https://github.com/SFML/SFML/releases/download/2.6.1/SFML-2.6.1-windows-vc17-64-bit.zip"
+          $ProgressPreference = 'SilentlyContinue'   # accelere Invoke-WebRequest
+          Invoke-WebRequest -Uri $url -OutFile sfml.zip -MaximumRetryCount 5 -RetryIntervalSec 10
           Expand-Archive -Path sfml.zip -DestinationPath C:\SFML -Force
 
       - name: Configure
