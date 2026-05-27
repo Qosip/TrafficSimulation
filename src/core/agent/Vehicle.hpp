@@ -51,6 +51,16 @@ protected:
     // Diagnostic (UI uniquement, pas de logique metier branchee dessus).
     core::agent::BlockReason currentBlockReason = core::agent::BlockReason::NONE;
 
+    // Instrumentation : trace de la decision (export CSV des blocages). Rempli a
+    // chaque computeDecision. AUCUNE logique metier ne s'y branche.
+    int   dbgLeaderSrc_           = 0;     // 0 aucun, 1 perception, 2 filet, 3 policy
+    int   dbgLeaderVin_           = -1;    // VIN du leader retenu (si vehicule)
+    float dbgLeaderRelHeadingDeg_ = 999.f; // cap leader - mon cap ; |.|<45 meme sens,
+                                           // <=135 croise, >135 contre-sens
+    float dbgLeaderGap_           = -1.f;
+    float dbgLeaderSpeed_         = 0.f;
+    bool  dbgOnInter_             = false; // physiquement sur l'aire d'un carrefour
+
     // Commit de passage : evite qu'un agent freine au milieu de l'intersection
     // si la priorite bascule pendant la traversee.
     bool isCommittedToPass       = false;
@@ -131,6 +141,20 @@ public:
     core::Vec2  getBodySize()  const override { return bodySize; }
     core::Color getBodyColor() const override { return bodyColor; }
     AgentDebugSnapshot getDebugSnapshot() const override;
+
+    // Snapshot de diagnostic decisionnel (export CSV des blocages). Tout est
+    // capture a la derniere computeDecision -> aucun pointeur pendant.
+    struct DecisionDiagnostic {
+        int   vin;
+        float x, y, headingDeg, speed;
+        int   blockReason;            // (int) core::agent::BlockReason
+        int   leaderSource;           // 0 aucun, 1 perception, 2 filet, 3 policy
+        int   leaderVin;
+        float leaderRelHeadingDeg;    // 999 si pas de leader-vehicule
+        float leaderGap, leaderSpeed;
+        bool  onIntersection;
+    };
+    DecisionDiagnostic getDecisionDiagnostic() const;
 
     std::string     getType()        const override { return "VEHICLE"; }
     core::TileCoord getStartTile()   const override { return startTile; }

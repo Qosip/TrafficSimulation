@@ -73,19 +73,22 @@ PerceptionResult Perception::scan(
                 std::abs(core::math::wrapDeg180(agent->getHeading() - laneHeading));
             if (hDiff > params.sameLaneHeadingTol) continue;
 
-            // Garde-fou ANTI CONTRE-SENS supplementaire, compare a MON cap COURANT.
-            // Le garde precedent (vs cap de la VOIE au point projete) a un trou : en
-            // virage / rond-point, le cap de ma voie PLUS LOIN sur l'arc peut
-            // coincider avec celui d'un vehicule d'EN FACE -> hDiff petit -> il etait
-            // accepte comme leader -> faux "SUIT" sur un vehicule oncoming -> blocage.
-            // Regle robuste : un vehicule qui SE DEPLACE (vitesse notable) a plus de
-            // 120 deg de MON cap roule a contre-sens et n'est JAMAIS un leader. Un
-            // vehicule ~A L'ARRET reste pris en compte (obstacle reel a eviter).
-            if (agent->getSpeed() > 15.f) {
-                const float hDiffMe =
-                    std::abs(core::math::wrapDeg180(agent->getHeading() - myHeadingDeg));
-                if (hDiffMe > 120.f) continue;
-            }
+            // Garde-fou ANTI CONTRE-SENS, compare a MON cap COURANT, SANS condition
+            // de vitesse. Le garde precedent (vs cap de la VOIE au point projete) a
+            // un trou : en virage / rond-point, le cap de ma voie PLUS LOIN sur l'arc
+            // peut coincider avec celui d'un vehicule d'EN FACE -> hDiff petit -> il
+            // etait pris comme leader -> faux "SUIT" sur un oncoming -> blocage.
+            // CRUCIAL : pas de filtre sur la vitesse. En BOUCHON tout roule lent
+            // (<15 px/s) ; un garde conditionne a la vitesse serait alors DESACTIVE
+            // -> le bug reapparait pile quand ca compte. Le critere correct est le
+            // CAP : un vehicule oriente a plus de 120 deg du mien fait face / roule a
+            // contre-sens -> JAMAIS un leader de suivi, qu'il roule ou soit a l'arret.
+            // Un vrai leader arrete dans MA voie est oriente comme moi (cap ~ le mien)
+            // -> conserve. Un obstacle fixe a contre-sens en pleine trajectoire releve
+            // du filet anti-collision (urgence), pas du car-following.
+            const float hDiffMe =
+                std::abs(core::math::wrapDeg180(agent->getHeading() - myHeadingDeg));
+            if (hDiffMe > 120.f) continue;
 
             const float bumperDist =
                 std::max(0.f, along - myHalfLength - otherHalfLength);

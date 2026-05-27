@@ -14,6 +14,8 @@
 #include <cfloat>
 #include <cstddef>
 #include <cstdio>
+#include <fstream>
+#include <cmath>
 
 #include "portable-file-dialogs.h"
 #include "core/agent/BlockReason.hpp"
@@ -870,6 +872,39 @@ int main() {
                 if (ImGui::Button("Exporter CSV", ImVec2(-1.f, 28.f))) {
                     std::string path = saveCsvDialog();
                     if (!path.empty()) metrics.exportCsv(path);
+                }
+                // --- Diagnostic des blocages : snapshot par-vehicule a l'instant
+                //     du clic (mettre en PAUSE d'abord pour un etat stable). Donne,
+                //     pour chaque agent : son motif, et la SOURCE + le CAP RELATIF de
+                //     son leader -> permet de voir si on "suit" un oncoming/croise. ---
+                if (ImGui::Button("Exporter diagnostic blocages (CSV)", ImVec2(-1.f, 28.f))) {
+                    std::string path = saveCsvDialog();
+                    if (!path.empty()) {
+                        std::ofstream os(path);
+                        os << "simTime," << metrics.aggregate().simTime << "\n";
+                        os << "vin,x,y,heading,speed,block,leaderSrc,leaderVin,"
+                              "leaderRelHead,leaderClass,leaderGap,leaderSpeed,onInter\n";
+                        for (auto& a : agents) {
+                            auto* v = dynamic_cast<Vehicle*>(a.get());
+                            if (!v) continue;
+                            const auto d = v->getDecisionDiagnostic();
+                            const char* src = (d.leaderSource == 1) ? "perception"
+                                            : (d.leaderSource == 2) ? "filet"
+                                            : (d.leaderSource == 3) ? "policy" : "-";
+                            const char* cls = "-";
+                            if (d.leaderRelHeadingDeg < 900.f) {
+                                const float h = std::fabs(d.leaderRelHeadingDeg);
+                                cls = (h < 45.f) ? "SAME" : (h <= 135.f ? "CROSS" : "ONCOMING");
+                            }
+                            os << d.vin << ',' << d.x << ',' << d.y << ',' << d.headingDeg
+                               << ',' << d.speed << ','
+                               << core::agent::toString(static_cast<core::agent::BlockReason>(d.blockReason))
+                               << ',' << src << ',' << d.leaderVin << ','
+                               << d.leaderRelHeadingDeg << ',' << cls << ','
+                               << d.leaderGap << ',' << d.leaderSpeed << ','
+                               << (d.onIntersection ? 1 : 0) << '\n';
+                        }
+                    }
                 }
                 if (ImGui::Button("Reset metriques", ImVec2(-1.f, 24.f))) metrics.reset();
             }

@@ -272,6 +272,12 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
 {
     using core::agent::BlockReason;
 
+    // --- Instrumentation diagnostic : remise a neuf chaque pas ---
+    dbgLeaderSrc_ = 0; dbgLeaderVin_ = -1; dbgLeaderRelHeadingDeg_ = 999.f;
+    dbgLeaderGap_ = -1.f; dbgLeaderSpeed_ = 0.f; dbgOnInter_ = false;
+    const IAgent* dbgLeaderPtr = nullptr;   // leader-vehicule final (frame courante)
+    int           dbgSrc       = 0;         // 1 perception, 2 filet
+
     if (!currentLane) {
         pendingAccel        = 0.f;
         pendingDesiredSpeed = 0.f;
@@ -336,6 +342,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             leader.gap      = lastPerception.directObstacleDistance;
             leader.speed    = lastPerception.directObstacleSpeed;
             leaderIsVehicle = true;
+            dbgLeaderPtr    = lastPerception.directObstacleAgent;  // diag
+            dbgSrc          = 1;
         }
     }
 
@@ -362,6 +370,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     bool stopForceHalt   = false;   // arret FERME a la ligne d'un STOP
 
     const Intersection* interOn = world.getIntersectionAt(position.x, position.y);
+    dbgOnInter_ = (interOn != nullptr);   // diag
     if (interOn) {
         isCommittedToPass       = true;
         committedIntersectionId = interOn->getId();
@@ -713,11 +722,17 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // voitures par-dessus les camions (longs) aux intersections. L'ordre
             // par VIN ne sert qu'a departager TANT QU'IL RESTE une marge.
             constexpr float kHardMin = 5.f;
-            if (headingDiff >= 45.f && !overtakeHeadOn && bumper > kHardMin) {
+            // Le bris d'egalite par VIN ne vaut QUE pour un conflit EN MOUVEMENT (qui
+            // va liberer la zone). Un corps ~A L'ARRET dans ma trajectoire est un
+            // OBSTACLE, pas une negociation : je freine TOUJOURS, meme prioritaire.
+            // Sinon un vehicule a petit VIN fonce jusqu'a 5 px d'un vehicule deja
+            // ENGAGE et fige a la boite -> "un engage bloque l'autre" -> gridlock.
+            const bool otherMoving = other->getSpeed() > 12.f;
+            if (headingDiff >= 45.f && !overtakeHeadOn && bumper > kHardMin && otherMoving) {
                 const int myV = getVehicleId();
                 const int oV  = other->getVehicleId();
                 const bool otherHasPriority = (oV >= 0) && (myV < 0 || oV < myV);
-                if (!otherHasPriority) continue;             // priorite + marge -> je passe
+                if (!otherHasPriority) continue;             // mouvant + priorite + marge -> je passe
             }
 
             // Leader d'urgence : on retient le plus contraignant (plus petit gap).
@@ -728,6 +743,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 leader.speed      = std::max(oFwdSpeed, 0.f);
                 leader.stopTarget = (oFwdSpeed < 5.f);   // obstacle ~fixe -> arret net
                 leaderIsVehicle   = true;
+                dbgLeaderPtr      = other.get();         // diag
+                dbgSrc            = 2;
             }
         }
     }
@@ -791,6 +808,18 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     } else {
         currentBlockReason = BlockReason::NONE;
     }
+
+    // --- Finalisation instrumentation diagnostic ---
+    if (dbgLeaderPtr) {
+        dbgLeaderSrc_           = dbgSrc;                  // 1 perception / 2 filet
+        dbgLeaderVin_           = dbgLeaderPtr->getVehicleId();
+        dbgLeaderRelHeadingDeg_ =
+            core::math::wrapDeg180(dbgLeaderPtr->getHeading() - currentAngle);
+    } else if (leaderFromRed || leaderFromStop || leaderFromYield ||
+               leaderFromP2P  || leaderFromPlatoon || leaderFromBox) {
+        dbgLeaderSrc_ = 3;                                 // leader virtuel de policy
+    }
+    if (leader.present) { dbgLeaderGap_ = leader.gap; dbgLeaderSpeed_ = leader.speed; }
 }
 
 // -----------------------------------------------------------------
@@ -904,6 +933,23 @@ AgentDebugSnapshot Vehicle::getDebugSnapshot() const {
     }
     if (currentLane) snap.pathPoints = currentLane->getPoints();
     return snap;
+}
+
+Vehicle::DecisionDiagnostic Vehicle::getDecisionDiagnostic() const {
+    DecisionDiagnostic d;
+    d.vin                 = vehicleId_;
+    d.x                   = position.x;
+    d.y                   = position.y;
+    d.headingDeg          = currentAngle;
+    d.speed               = currentSpeed;
+    d.blockReason         = static_cast<int>(currentBlockReason);
+    d.leaderSource        = dbgLeaderSrc_;
+    d.leaderVin           = dbgLeaderVin_;
+    d.leaderRelHeadingDeg = dbgLeaderRelHeadingDeg_;
+    d.leaderGap           = dbgLeaderGap_;
+    d.leaderSpeed         = dbgLeaderSpeed_;
+    d.onIntersection      = dbgOnInter_;
+    return d;
 }
 
 core::TileCoord Vehicle::getCurrentTile() const {
