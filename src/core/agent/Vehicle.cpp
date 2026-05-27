@@ -559,27 +559,23 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             const float margin = 6.f + 0.25f * closing;
             if (bumper >= margin) continue;                         // pas imminent
 
-            // --- Anti-DEADLOCK : conflit reciproque ? -------------------------
-            // Si 'other' m'a AUSSI dans son couloir d'avance, on est dans un
-            // conflit mutuel ou les DEUX freineraient l'un pour l'autre et se
-            // figeraient ("je le suis / il me suit"). On tranche par VIN : le
-            // plus PETIT VIN garde la priorite (ne cede pas), le plus grand cede.
-            // Ordre total -> aucun cycle possible. Un PUR suiveur (l'autre devant
-            // moi mais moi pas devant lui) freine toujours -> suivi de file et
-            // anti-collision en courbe (rond-point) preserves.
-            {
-                const core::Vec2 dpBA = position - other->getPosition();
-                const float otherForward = dpBA.x * oFwd.x + dpBA.y * oFwd.y;
-                const float otherLateral = std::abs(dpBA.x * (-oFwd.y) + dpBA.y * oFwd.x);
-                const float otherHalfWidth = other->getBodySize().y / 2.f;
-                const bool  mutual = (otherForward > 0.f) &&
-                                     (otherLateral <= otherHalfWidth + myHalfLen + 3.f);
-                if (mutual) {
-                    const int myV = getVehicleId();
-                    const int oV  = other->getVehicleId();
-                    const bool iHavePriority = (myV >= 0) && (oV < 0 || myV < oV);
-                    if (iHavePriority) continue;   // je passe ; l'autre cedera
-                }
+            // --- Anti-DEADLOCK -----------------------------------------------
+            // Trafic de MEME sens (suivi de file) -> je freine TOUJOURS : une
+            // chaine de suiveurs ne se bloque jamais (sa tete est libre, seul le
+            // suiveur arriere freine, pas reciproque).
+            // CONFLIT croise/oppose (cap different) -> ordre TOTAL par VIN : je ne
+            // cede qu'a un VIN plus PETIT (prioritaire). Dans n'importe quel CYCLE
+            // de conflits (A cede a B, B a C, C a A : gel rotatif dans le
+            // carrefour), le plus petit VIN ne cede a personne -> il avance et
+            // brise le blocage. Resout les cycles a N vehicules, pas seulement les
+            // paires (c'etait la limite de la version precedente).
+            const float headingDiff =
+                std::abs(core::math::wrapDeg180(other->getHeading() - currentAngle));
+            if (headingDiff >= 45.f) {                       // pas un suivi de file
+                const int myV = getVehicleId();
+                const int oV  = other->getVehicleId();
+                const bool otherHasPriority = (oV >= 0) && (myV < 0 || oV < myV);
+                if (!otherHasPriority) continue;             // j'ai priorite -> je passe
             }
 
             // Leader d'urgence : on retient le plus contraignant (plus petit gap).
@@ -594,8 +590,31 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         }
     }
 
-    // --- IDM ---
-    pendingAccel = idm.computeAcceleration(currentSpeed, v0, leader);
+    // --- Loi de poursuite longitudinale : CACC (peloton connecte) ou IDM ------
+    if (personality_.cooperative && leaderIsVehicle &&
+        lastPerception.hasDirectObstacle && lastPerception.directObstacleAgent) {
+        // PELOTON COOPERATIF (CACC) : distance CONSTANTE + feed-forward de
+        // l'acceleration du predecesseur (communiquee). Consequences voulues :
+        //   * demarrage en UNISSON (le suiveur recoit aLead, pas besoin d'attendre
+        //     que le gap s'ouvre -> aucun delai de reaction perceptible) ;
+        //   * intervalle court CONSTANT (gapDesired fixe), qui NE s'ouvre PAS
+        //     quand la vitesse augmente -- impossible avec l'IDM seul ou le gain
+        //     d'equilibre vaut s0 + v*T.
+        const float vLead      = lastPerception.directObstacleSpeed;
+        const float aLead      = lastPerception.directObstacleAgent->getCurrentAccel();
+        const float gap        = lastPerception.directObstacleDistance;
+        const float gapDesired = idm.params().s0 + 12.f;        // px : distance fixe courte
+        constexpr float kp = 0.6f, kv = 1.2f;
+        float aCacc = aLead + kv * (vLead - currentSpeed) + kp * (gap - gapDesired);
+        // Ne jamais depasser l'allure libre (respect de v0) ; borner aux capacites.
+        const float aFree = idm.computeAcceleration(currentSpeed, v0,
+                                                    core::behavior::LeaderInfo{});
+        aCacc = std::min(aCacc, aFree);
+        pendingAccel = std::clamp(aCacc, -idm.params().bComf * 2.f, idm.params().aMax);
+    } else {
+        // --- IDM ---
+        pendingAccel = idm.computeAcceleration(currentSpeed, v0, leader);
+    }
 
     // STOP : marquage a la ligne. Frein FERME mais LISSE. Le leader virtuel
     // colle (gap 0) ferait tendre l'IDM vers une deceleration quasi infinie qui
@@ -635,6 +654,10 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
 // -----------------------------------------------------------------
 
 void Vehicle::integrate(float dt) {
+    // Publie la commande d'acceleration de CE pas pour le feed-forward CACC des
+    // suiveurs (lue par eux au pas SUIVANT, en phase 1 -> jamais de course).
+    lastAccel_ = pendingAccel;
+
     if (!currentLane || hasFinishedPath) return;
 
     // Panne : agent fige, on decremente le timer ici (computeDecision
@@ -1032,6 +1055,24 @@ void Vehicle::updateOvertakeDecision(
     const World& world)
 {
     if (overtakeState == OvertakeState::NONE) return;
+
+    // SECURITE (use-after-free) : le vehicule double (overtakeLeader) a pu etre
+    // DETRUIT entre deux pas (il est arrive a destination -> efface du vecteur).
+    // overtakeLeader est un pointeur NU conserve d'un pas a l'autre : on verifie
+    // donc qu'il pointe toujours sur un agent VIVANT avant tout dereferencement
+    // (cf. crash de la scene XXXXL apres ~10 s, quand les premiers arrivent).
+    if (overtakeLeader) {
+        bool stillAlive = false;
+        for (const auto& a : agents)
+            if (a.get() == overtakeLeader) { stillAlive = true; break; }
+        if (!stillAlive) {
+            // Le vehicule double a disparu -> on annule la reference pendante et
+            // on se rabat proprement dans la voie.
+            overtakeLeader = nullptr;
+            overtakeState  = OvertakeState::RETURNING;
+            overtakeTarget = 0.f;
+        }
+    }
 
     // Abort si oncoming devient dangereux.
     if (overtakeState == OvertakeState::OVERTAKING &&

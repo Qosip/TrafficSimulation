@@ -43,6 +43,13 @@ struct Personality {
     float breakdownChancePerMin = 0.f;  // [0..0.1]
     float breakdownDurationSec  = 8.f;  // duree moyenne d'arret (s)
 
+    // --- Coordination de peloton (CACC) ---
+    // true : poursuite COOPERATIVE a distance constante avec feed-forward de
+    // l'acceleration du predecesseur (vehicules connectes). Demarrage en unisson
+    // (aucun delai de reaction) et intervalle court CONSTANT (pas d'ouverture de
+    // gap avec la vitesse, contrairement a l'IDM en temps-inter constant).
+    bool cooperative = false;
+
     // Helpers de clamp pour proteger les sliders UI.
     void clamp() {
         auto C = [](float v, float lo, float hi) { return std::clamp(v, lo, hi); };

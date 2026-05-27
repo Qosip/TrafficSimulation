@@ -75,4 +75,11 @@ public:
     virtual core::agent::TurnIntent getTurnIntent() const {
         return core::agent::TurnIntent::UNKNOWN;
     }
+
+    // Acceleration COMMANDEE au dernier pas integre (px/s^2). Exposee pour le
+    // feed-forward des pelotons cooperatifs (CACC) : un suiveur copie
+    // l'acceleration de son predecesseur pour demarrer en unisson, sans delai.
+    // Lue en phase 1 (decision), ecrite en phase 2 (integrate) -> pas de course.
+    // Non-pur : defaut 0.
+    virtual float getCurrentAccel() const { return 0.f; }
 };

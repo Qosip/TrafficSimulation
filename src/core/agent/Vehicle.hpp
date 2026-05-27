@@ -45,6 +45,7 @@ protected:
     // --- Wave 5 : decision/integration split ---
     float pendingAccel        = 0.f;  // sortie de computeDecision
     float pendingDesiredSpeed = 0.f;  // v0 IDM courant (clip limite/virage)
+    float lastAccel_          = 0.f;  // commande integree au dernier pas (feed-forward CACC)
     core::behavior::IdmModel idm;     // modele car-following par defaut
 
     // Diagnostic (UI uniquement, pas de logique metier branchee dessus).
@@ -144,6 +145,7 @@ public:
 
     int getVehicleId() const override { return vehicleId_; }
     core::agent::TurnIntent getTurnIntent() const override;
+    float getCurrentAccel() const override { return lastAccel_; }
 
     // Permet a Car/Truck d'injecter leurs parametres IDM specifiques.
     void setIdmParams(const core::behavior::IdmParams& p) {

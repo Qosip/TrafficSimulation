@@ -127,41 +127,42 @@ void buildCarFollowing(std::unique_ptr<World>& world, AgentVec& agents) {
 // le panneau "Metriques" chiffre debit / vitesse moyenne sur l'ensemble.
 void buildTruckPlatoon(std::unique_ptr<World>& world, AgentVec& agents) {
     agents.clear();
-    constexpr int W = 60, H = 16;
+    constexpr int W = 60, H = 14;
     world = std::make_unique<World>(W, H, TS);
     World& w = *world;
 
-    // Deux autoroutes 2 voies (seule la voie EST, RIGHT, est peuplee).
-    auto layHighway = [&](int yEast) {
-        for (int x = 0; x < W; ++x) {
-            w.setTile(x, yEast,     RoadType::HIGHWAY_130, TileDirection::RIGHT);
-            w.setTile(x, yEast - 1, RoadType::HIGHWAY_130, TileDirection::LEFT);
-        }
-    };
-    constexpr int yPlatoon = 5;     // voie HAUTE  (platoon CACC)
-    constexpr int yNormal  = 11;    // voie BASSE  (conventionnel)
-    layHighway(yPlatoon);
-    layHighway(yNormal);
+    // Deux routes 2 voies (CITY_50) : seule la voie EST (RIGHT) est peuplee.
+    constexpr int yPlatoon = 4;     // voie HAUTE  (platoon CACC)
+    constexpr int yNormal  = 9;     // voie BASSE  (conventionnel)
+    buildHRoad(w, yPlatoon, 0, W - 1);
+    buildHRoad(w, yNormal,  0, W - 1);
 
-    // Platoon CACC : intervalle court (T ~0.5 s), reponse vive, cooperatif et
-    // fiable (vehicules connectes -> pas de panne dans cette demo).
+    // Platoon CACC : intervalle TRES court (T ~0.5 s), lancement synchronise
+    // (acceleration vive, vehicules connectes) -> la file demarre EN BLOC et
+    // reste compacte. Fiable (pas de panne dans la demo).
     Personality platoon = prof::truckDriver();
-    platoon.reactionTimeFactor    = 0.30f;   // T = 1.7 x 0.30 ~ 0.5 s (headway court)
-    platoon.minGapFactor          = 0.50f;   // s0 reduit
-    platoon.accelEagernessFactor  = 1.50f;   // cohesion : se recale vite sur le leader
-    platoon.comfortBrakeFactor    = 1.10f;
+    platoon.cooperative           = true;    // CACC : unisson + distance constante
+    platoon.reactionTimeFactor    = 0.30f;   // (repli IDM court si CACC desactive)
+    platoon.minGapFactor          = 0.40f;   // s0 reduit -> distance constante courte
+    platoon.accelEagernessFactor  = 1.80f;   // capacite d'accel du leader (surge)
+    platoon.comfortBrakeFactor    = 1.20f;
     platoon.speedComplianceFactor = 1.00f;
     platoon.overtakeWillingness   = 0.0f;    // on ne rompt jamais la formation
     platoon.breakdownChancePerMin = 0.0f;
 
-    // Conventionnel : profil camion standard (grand intervalle de securite).
+    // Conventionnel : profil camion standard -> accel LENTE + grand intervalle
+    // de securite. Au demarrage, chaque camion attend que celui de devant degage
+    // (effet "temps de reaction") -> la file s'ETALE en accordeon.
     Personality normal = prof::truckDriver();
-    normal.breakdownChancePerMin  = 0.0f;    // pas de panne -> on compare le SEUL espacement
+    normal.breakdownChancePerMin  = 0.0f;
 
-    // Meme depart, meme nombre, meme espacement initial (3 tuiles) sur les 2 voies.
-    constexpr int kCount = 7;
+    // CLE de la demo : les DEUX files demarrent COLLEES et A L'ARRET (espacement
+    // 2 tuiles ~ 20 px pare-chocs, comme a un feu rouge). On observe ensuite le
+    // LANCEMENT : le platoon part en bloc et reste serre ; la file classique
+    // s'etire (accel lente + grand intervalle) facon "feu qui passe au vert".
+    constexpr int kCount = 8;
     for (int i = 0; i < kCount; ++i) {
-        const int sx = 2 + i * 3;
+        const int sx = 2 + i * 2;        // 2 tuiles -> ~20 px entre pare-chocs (colle)
         addTruck(agents, w, sx, yPlatoon, W - 2, yPlatoon, platoon);
         addTruck(agents, w, sx, yNormal,  W - 2, yNormal,  normal);
     }
@@ -367,9 +368,10 @@ std::vector<ScenarioDef> makeCatalog() {
         "Camion lent en tete : la file se cale derriere a distance de securite (IDM).",
         buildCarFollowing);
     add("Convoi de camions : platoon CACC vs conventionnel", "Bases",
-        "Deux files de 7 camions, meme depart. En HAUT un platoon CACC (intervalle "
-        "court, connecte) reste compact et flue ; en BAS des camions classiques "
-        "s'etalent. Montre l'interet du platooning : debit, sillage, flux lisse.",
+        "Deux files de 8 camions demarrent COLLEES et a l'arret (comme a un feu). "
+        "Au vert : en HAUT le platoon CACC s'elance EN BLOC et reste serre ; en "
+        "BAS les camions classiques s'etalent en accordeon (accel lente + grand "
+        "intervalle de securite). Montre concretement l'interet du platooning.",
         buildTruckPlatoon);
 
     // --- Carrefour : modes de regulation ---
