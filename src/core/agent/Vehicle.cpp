@@ -663,11 +663,17 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // a-queue pendant un double rate (criticite de securite MOBIL b_safe).
             const bool overtakeHeadOn =
                 (overtakeState != OvertakeState::NONE) && (headingDiff > 135.f);
-            if (headingDiff >= 45.f && !overtakeHeadOn) {    // pas un suivi de file
+            // CHEVAUCHEMENT IMMINENT (carrosseries qui se touchent presque) : on
+            // freine TOUJOURS, meme prioritaire. La priorite n'autorise PAS a
+            // traverser le corps d'un autre -> c'est ce qui faisait "passer" les
+            // voitures par-dessus les camions (longs) aux intersections. L'ordre
+            // par VIN ne sert qu'a departager TANT QU'IL RESTE une marge.
+            constexpr float kHardMin = 5.f;
+            if (headingDiff >= 45.f && !overtakeHeadOn && bumper > kHardMin) {
                 const int myV = getVehicleId();
                 const int oV  = other->getVehicleId();
                 const bool otherHasPriority = (oV >= 0) && (myV < 0 || oV < myV);
-                if (!otherHasPriority) continue;             // j'ai priorite -> je passe
+                if (!otherHasPriority) continue;             // priorite + marge -> je passe
             }
 
             // Leader d'urgence : on retient le plus contraignant (plus petit gap).

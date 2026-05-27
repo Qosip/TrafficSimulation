@@ -46,11 +46,6 @@ PerceptionResult Perception::scan(
             result.detected.push_back(obj);
         }
 
-        // Garde-fou same-direction : un leader roule globalement dans mon sens.
-        const float headingDiff =
-            std::abs(core::math::wrapDeg180(agent->getHeading() - myHeadingDeg));
-        if (headingDiff > params.sameLaneHeadingTol) continue;
-
         const float otherHalfLength = agent->getLength() / 2.f;
 
         if (myLane) {
@@ -67,6 +62,17 @@ PerceptionResult Perception::scan(
             const float along = proj.s - myS;          // distance le long du tracé
             if (along <= 0.f) continue;                // derriere moi sur la voie
 
+            // Garde-fou same-direction COMPARE AU CAP DE LA VOIE au point de
+            // projection (pas a MON cap courant) : sur une courbe / un ROND-POINT,
+            // mon cap differe de celui du leader plus loin sur l'arc. Un vrai
+            // leader qui circule a un cap ~= tangente de la voie -> accepte ; un
+            // vehicule qui ATTEND d'entrer (cap radial, ~90° de la tangente) ou en
+            // contre-sens -> rejete. Corrige le faux "SUIT" sur un rond-point.
+            const float laneHeading = myLane->getHeadingAt(proj.s);
+            const float hDiff =
+                std::abs(core::math::wrapDeg180(agent->getHeading() - laneHeading));
+            if (hDiff > params.sameLaneHeadingTol) continue;
+
             const float bumperDist =
                 std::max(0.f, along - myHalfLength - otherHalfLength);
             if (!result.hasDirectObstacle || bumperDist < result.directObstacleDistance) {
@@ -77,6 +83,9 @@ PerceptionResult Perception::scan(
             }
         } else {
             // --- Repli : ancien cone etroit (pas de trajectoire fournie) ---
+            const float headingDiff =
+                std::abs(core::math::wrapDeg180(agent->getHeading() - myHeadingDeg));
+            if (headingDiff > params.sameLaneHeadingTol) continue;
             if (std::abs(relAngle) > params.directHalfAngle) continue;
             const float bumperDist =
                 std::max(0.f, dist - myHalfLength - otherHalfLength);
