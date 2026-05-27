@@ -520,6 +520,57 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         }
     }
 
+    // --- Filet de securite anti-collision (DERNIER RECOURS) -----------------
+    // Independant de toute policy d'intersection. La Perception ne retient comme
+    // leader QUE le trafic de meme sens (car-following) ; le trafic CROISE est
+    // gere par les leaders virtuels des policies. Si cette heuristique faillit
+    // (projection 1D du peloton, arrivees quasi simultanees...), rien n'empeche
+    // deux carrosseries de se chevaucher. Ce filet freine pour TOUT agent
+    // physiquement dans mon couloir d'avance quand l'impact est imminent.
+    // Declenchement de proximite uniquement -> n'altere pas la conduite normale.
+    {
+        const float headRad = currentAngle * core::math::DEG2RAD;
+        const core::Vec2 fwd{ std::cos(headRad), std::sin(headRad) };
+        const float myHalfLen   = bodySize.x / 2.f;
+        const float myHalfWidth = bodySize.y / 2.f;
+
+        for (const auto& other : agents) {
+            if (!other || other.get() == this) continue;
+            const core::Vec2 dp = other->getPosition() - position;
+            const float forwardDist = dp.x * fwd.x + dp.y * fwd.y;
+            if (forwardDist <= 0.f) continue;                       // derriere moi
+
+            const float lateral      = std::abs(dp.x * (-fwd.y) + dp.y * fwd.x);
+            const float otherHalfLen = other->getLength() / 2.f;
+            // Couloir = ma demi-largeur + l'empreinte de l'autre (croise => sa
+            // longueur barre ma voie) + petite marge laterale.
+            if (lateral > myHalfWidth + otherHalfLen + 3.f) continue;
+
+            const float bumper = forwardDist - myHalfLen - otherHalfLen;
+
+            // Composante de vitesse de l'autre le long de MON cap (croise -> ~0).
+            const float oRad      = other->getHeading() * core::math::DEG2RAD;
+            const float oFwdSpeed = (std::cos(oRad) * fwd.x + std::sin(oRad) * fwd.y)
+                                    * other->getSpeed();
+            const float closing   = std::max(currentSpeed - oFwdSpeed, 0.f);
+
+            // Marge proportionnelle a la vitesse de rapprochement (plus de
+            // distance de reaction quand ca ferme vite), bornee petit.
+            const float margin = 6.f + 0.25f * closing;
+            if (bumper >= margin) continue;                         // pas imminent
+
+            // Leader d'urgence : on retient le plus contraignant (plus petit gap).
+            if (!leader.present || bumper < leader.gap) {
+                leader            = core::behavior::LeaderInfo{};
+                leader.present    = true;
+                leader.gap        = std::max(bumper, 0.f);
+                leader.speed      = std::max(oFwdSpeed, 0.f);
+                leader.stopTarget = (oFwdSpeed < 5.f);   // obstacle ~fixe -> arret net
+                leaderIsVehicle   = true;
+            }
+        }
+    }
+
     // --- IDM ---
     pendingAccel = idm.computeAcceleration(currentSpeed, v0, leader);
 

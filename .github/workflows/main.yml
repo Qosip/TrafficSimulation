@@ -66,25 +66,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # SFML via vcpkg (preinstalle sur les runners GitHub Windows). Le toolchain
-      # vcpkg active aussi le deploiement automatique des DLL a cote du .exe.
-      - name: Install SFML (vcpkg)
-        run: vcpkg install sfml:x64-windows
+      # SFML officiel 2.6.x (binaires MSVC vc17 64-bit). On NE PASSE PAS par
+      # vcpkg : il fournit desormais SFML 3.0 (API differente, et ImGui-SFML v2.5
+      # exige SFML 2.x). On pointe SFML_DIR sur l'archive officielle 2.6.1.
+      - name: Download SFML 2.6.1 (MSVC vc17, 64-bit)
+        shell: pwsh
+        run: |
+          $url = "https://www.sfml-dev.org/files/SFML-2.6.1-windows-vc17-64-bit.zip"
+          Invoke-WebRequest -Uri $url -OutFile sfml.zip
+          Expand-Archive -Path sfml.zip -DestinationPath C:\SFML -Force
 
       - name: Configure
         shell: pwsh
         run: >
           cmake -S . -B build
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DSFML_DIR="C:/SFML/SFML-2.6.1/lib/cmake/SFML"
           -DTRAFFIC_BUILD_APP=ON
           -DTRAFFIC_BUILD_TESTS=OFF
 
       - name: Build (Release)
         run: cmake --build build --config Release --parallel
 
-      # Le post-build CMake copie deja assets/ a cote du .exe ; le toolchain
-      # vcpkg copie les DLL SFML. On empaquette tout le dossier de sortie.
+      # Le post-build CMake copie deja assets/ a cote du .exe. On y ajoute les
+      # DLL SFML (release) puis on empaquette tout le dossier de sortie.
       - name: Package
         shell: pwsh
         run: |
@@ -92,6 +96,8 @@ jobs:
           if (-not (Test-Path "$out/TrafficSimulation.exe")) {
             Write-Error "Executable introuvable dans $out"; exit 1
           }
+          $bin = "C:/SFML/SFML-2.6.1/bin"
+          Copy-Item "$bin/sfml-graphics-2.dll","$bin/sfml-window-2.dll","$bin/sfml-system-2.dll" -Destination $out
           New-Item -ItemType Directory -Force dist | Out-Null
           Compress-Archive -Path "$out/*" -DestinationPath "dist/TrafficSimulation-windows-x64.zip" -Force
 

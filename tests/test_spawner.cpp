@@ -9,9 +9,11 @@
 //   * limite de temps : atteinte apres la duree simulee demandee.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
+#include "core/agent/BlockReason.hpp"
 #include "core/agent/IAgent.hpp"
 #include "core/world/World.hpp"
 #include "sim/McGeometry.hpp"
@@ -35,6 +37,23 @@ World makeCrossWorld() {
 // Les camions sont longs (80 px) ; les voitures courtes (30). getLength() suffit
 // a classer le type sans dependre d'un getType() textuel.
 bool isTruck(const IAgent& a) { return a.getLength() > 50.f; }
+
+// Avance la simulation d'un pas FIXE (pipeline 2 phases) et recycle les agents
+// arrives/bloques -- exactement comme le moteur hote. Indispensable pour que
+// les vehicules injectes QUITTENT l'entree et liberent la place : sans cela, le
+// spawner se bloque sur la contrainte d'espacement et n'atteint jamais le budget.
+void stepAndRecycle(World& w, std::vector<std::unique_ptr<IAgent>>& agents, float dt) {
+    w.updateIntersections(dt);
+    for (auto& a : agents) if (a) a->computeDecision(agents, w);
+    for (auto& a : agents) if (a) a->integrate(dt);
+    agents.erase(std::remove_if(agents.begin(), agents.end(),
+        [](const std::unique_ptr<IAgent>& a) {
+            if (!a) return true;
+            const auto r = a->getBlockReason();
+            return r == core::agent::BlockReason::AT_GOAL ||
+                   r == core::agent::BlockReason::NO_PATH;
+        }), agents.end());
+}
 
 } // namespace
 
@@ -120,16 +139,22 @@ TEST(McLiveSession, BudgetSpawnsExactlyN) {
     mc.start(w, agents, RegulationType::FIXED_PRIORITY, /*density*/1.0f,
              SpawnProfile{}, /*seed*/7u, /*maxSpawns*/kBudget, /*timeLimit*/0.f);
 
-    // Avance le temps simule jusqu'a epuisement du budget (garde-fou anti-boucle).
-    for (int i = 0; i < 200000 && !mc.budgetExhausted(); ++i)
+    // Fait TOURNER la simulation (injection + pas physique + recyclage) jusqu'a
+    // epuisement du budget. Les vehicules doivent circuler pour liberer l'entree.
+    for (int i = 0; i < 200000 && !mc.budgetExhausted(); ++i) {
         mc.inject(*w, agents, kDt);
+        stepAndRecycle(*w, agents, kDt);
+    }
 
     EXPECT_TRUE(mc.budgetExhausted());
     EXPECT_EQ(mc.spawned(), kBudget) << "Le budget doit injecter EXACTEMENT N vehicules";
 
-    // Au-dela du budget, plus aucune injection.
+    // Au-dela du budget, plus aucune injection meme en continuant a tourner.
     const int before = mc.spawned();
-    for (int i = 0; i < 1000; ++i) mc.inject(*w, agents, kDt);
+    for (int i = 0; i < 2000; ++i) {
+        mc.inject(*w, agents, kDt);
+        stepAndRecycle(*w, agents, kDt);
+    }
     EXPECT_EQ(mc.spawned(), before);
 }
 
