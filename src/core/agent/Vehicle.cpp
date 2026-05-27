@@ -580,7 +580,53 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 }
             }
 
-            const bool mayEnter = canPass && !exitBlocked;
+            // --- Anti-conflit de boite : serialise les mouvements CROISES ------
+            // Donnees a l'appui (leaderSrc=filet, leaderClass=CROSS, onInter=1) :
+            // deux vehicules PERPENDICULAIRES qui s'engagent au MEME pas se coincent
+            // mutuellement dans la boite -> standoff que RIEN ne resout localement
+            // (avancer = collision). Les policies ne l'empechent pas toujours
+            // (canEnter vrai des deux cotes). On PREVIENT, policy-agnostique : je
+            // n'entre pas tant qu'un mouvement CROISE (cap a 45..135 du mien) occupe
+            // PHYSIQUEMENT cette boite. A granularite frame, le 2e arrivant voit le
+            // 1er DEDANS et cede -> un seul flux croise dans la boite a la fois ; elle
+            // se vide par l'avancee du 1er -> liveness (recuperable, pas de famine).
+            // (Le sens OPPOSE ~180 n'est PAS un conflit : voies paralleles, exclu.)
+            bool crossingInBox = false;
+            {
+                const int        myVin  = getVehicleId();
+                const core::Vec2 interC = interAhead->getWorldCenter(tileSize);
+                for (const auto& other : agents) {
+                    if (!other || other.get() == this) continue;
+                    const float dH =
+                        std::abs(core::math::wrapDeg180(other->getHeading() - currentAngle));
+                    if (dH < 45.f || dH > 135.f) continue;   // garde le CROISE perpendiculaire
+                    const core::Vec2 op = other->getPosition();
+
+                    // (a) Deja DANS ma boite -> je cede, quel que soit son VIN.
+                    if (world.getIntersectionAt(op.x, op.y) == interAhead) {
+                        crossingInBox = true;
+                        break;
+                    }
+                    // (b) Departage des arrivees ~SIMULTANEES (aucun encore dedans) :
+                    // je cede a un contender croise EN MOUVEMENT vers ma boite avec un
+                    // VIN plus petit. Auto-correcteur : s'il s'arrete (cale), il cesse
+                    // d'etre un contender -> je ne lui cede plus (aucune famine).
+                    const int ov = other->getVehicleId();
+                    if (ov < 0 || ov >= myVin)        continue;   // pas prioritaire
+                    if (other->getSpeed() < 10.f)     continue;   // pas un contender actif
+                    const core::Vec2 dC = interC - op;
+                    const float distOC = dC.length();
+                    if (distOC > tileSize * 2.5f)     continue;   // pas proche de la boite
+                    const float oRad = other->getHeading() * core::math::DEG2RAD;
+                    const core::Vec2 oDir{ std::cos(oRad), std::sin(oRad) };
+                    if (distOC > 1.f &&
+                        (oDir.x * dC.x + oDir.y * dC.y) / distOC < 0.3f) continue; // s'eloigne
+                    crossingInBox = true;
+                    break;
+                }
+            }
+
+            const bool mayEnter = canPass && !exitBlocked && !crossingInBox;
             const bool proceed  = mayEnter || (cannotStop && !isStopAhead);
 
             if (proceed) {
@@ -623,6 +669,19 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     leader          = box;
                     leaderIsVehicle = false;
                     leaderFromBox   = true;
+                }
+            } else if (crossingInBox) {
+                // Un mouvement CROISE occupe la boite -> j'attends a MA ligne d'entree
+                // (ne pas ajouter un 2e corps perpendiculaire = pas de standoff).
+                core::behavior::LeaderInfo cx;
+                cx.present    = true;
+                cx.gap        = std::max(distToInter - getLength() / 2.f - 4.f, 0.f);
+                cx.speed      = 0.f;
+                cx.stopTarget = true;
+                if (!leader.present || cx.gap < leader.gap) {
+                    leader          = cx;
+                    leaderIsVehicle = false;
+                    leaderFromYield = true;   // diag : cede (conflit de boite)
                 }
             }
 
