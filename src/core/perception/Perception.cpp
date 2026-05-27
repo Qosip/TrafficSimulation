@@ -73,6 +73,20 @@ PerceptionResult Perception::scan(
                 std::abs(core::math::wrapDeg180(agent->getHeading() - laneHeading));
             if (hDiff > params.sameLaneHeadingTol) continue;
 
+            // Garde-fou ANTI CONTRE-SENS supplementaire, compare a MON cap COURANT.
+            // Le garde precedent (vs cap de la VOIE au point projete) a un trou : en
+            // virage / rond-point, le cap de ma voie PLUS LOIN sur l'arc peut
+            // coincider avec celui d'un vehicule d'EN FACE -> hDiff petit -> il etait
+            // accepte comme leader -> faux "SUIT" sur un vehicule oncoming -> blocage.
+            // Regle robuste : un vehicule qui SE DEPLACE (vitesse notable) a plus de
+            // 120 deg de MON cap roule a contre-sens et n'est JAMAIS un leader. Un
+            // vehicule ~A L'ARRET reste pris en compte (obstacle reel a eviter).
+            if (agent->getSpeed() > 15.f) {
+                const float hDiffMe =
+                    std::abs(core::math::wrapDeg180(agent->getHeading() - myHeadingDeg));
+                if (hDiffMe > 120.f) continue;
+            }
+
             const float bumperDist =
                 std::max(0.f, along - myHalfLength - otherHalfLength);
             if (!result.hasDirectObstacle || bumperDist < result.directObstacleDistance) {
