@@ -550,44 +550,21 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
                             if (pr.s >= blockFrom && pr.s <= sExit + need) { blocked = true; break; }
                         }
-                        constexpr float kFixedDt     = 1.f / 60.f;
-                        constexpr float kReleaseHold = 3.0f;   // s avant qu'un jeton force
-                        if (blocked) {
-                            keepClearWaited_ += kFixedDt;
-                            // Liveness anti-deadlock SANS block-the-box generalise.
-                            // L'ANCIEN code laissait TOUTE approche forcer le passage
-                            // passe un delai fixe : sous charge les 4 branches
-                            // atteignaient le seuil ~ensemble et s'engageaient TOUTES
-                            // -> boite saturee -> GRIDLOCK PERMANENT. Desormais un
-                            // SEUL vehicule recoit le jeton : le plus petit VIN parmi
-                            // ceux a l'arret aux abords de CE carrefour. Les autres
-                            // attendent -> la boite reste degagee -> le reseau se draine
-                            // des qu'une sortie se libere, et un standoff rotatif est
-                            // quand meme brise (le plus petit VIN franchit). Ordre total
-                            // par VIN -> deterministe ; le jeton "tourne" des que le
-                            // porteur precedent a degage (il n'est plus a l'arret ici).
-                            bool      iAmToken = true;
-                            const int myVin    = getVehicleId();
-                            const float nearR  = tileSize * 1.8f;
-                            for (const auto& other : agents) {
-                                if (!other || other.get() == this) continue;
-                                if (other->getSpeed() > 8.f) continue;      // seulement les arretes
-                                const int ov = other->getVehicleId();
-                                if (ov < 0 || ov >= myVin) continue;        // pas plus prioritaire
-                                bool nearInter = false;
-                                for (const auto& t : interAhead->getCoveredTiles()) {
-                                    const core::Vec2 tc{ t.x * tileSize + tileSize / 2.f,
-                                                         t.y * tileSize + tileSize / 2.f };
-                                    const core::Vec2 dd = other->getPosition() - tc;
-                                    if (dd.x * dd.x + dd.y * dd.y < nearR * nearR) { nearInter = true; break; }
-                                }
-                                if (nearInter) { iAmToken = false; break; }  // un VIN plus petit attend ici
-                            }
-                            const bool release = iAmToken && (keepClearWaited_ >= kReleaseHold);
-                            exitBlocked = !release;
-                        } else {
-                            keepClearWaited_ = 0.f;
-                        }
+                        constexpr float kFixedDt = 1.f / 60.f;
+                        // KEEP-CLEAR ABSOLU : boite/sortie non degageable -> je
+                        // n'entre PAS, sans limite de temps. (L'ancien override
+                        // temporise FORCAIT l'entree apres un delai -> block-the-box ->
+                        // GRIDLOCK PERMANENT.) Invariant : aucun vehicule ne s'IMMOBILISE
+                        // dans la boite -> la boite reste franchissable -> le reseau se
+                        // draine des qu'une sortie se libere. Les entrees simultanees
+                        // conflictuelles sont tranchees en AMONT par la policy (droit de
+                        // passage) et, a la boite, par le filet VIN -- JAMAIS en forcant
+                        // l'entree dans une sortie pleine. Une vraie sur-saturation
+                        // (toutes les sorties d'un cycle pleines, sans drainage) reste un
+                        // probleme de DEBIT, pas de logique : insoluble localement, mais
+                        // ici au moins RECUPERABLE (les boites restent degagees).
+                        if (blocked) { exitBlocked = true; keepClearWaited_ += kFixedDt; }
+                        else         { keepClearWaited_ = 0.f; }
                     } else {
                         keepClearWaited_ = 0.f;
                     }
