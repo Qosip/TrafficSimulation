@@ -393,7 +393,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             if (found) { interAhead = found; distToInter = d; break; }
         }
 
-        if (interAhead && !(isCommittedToPass && committedIntersectionId == interAhead->getId())) {
+        if (interAhead) {   // re-evalue a CHAQUE pas (aucun "commit" collant)
             const Approach::Direction myDir = world.getApproachDirection(currentAngle);
 
             core::intersection::PolicyContext ctx;
@@ -456,80 +456,120 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 canPass = stopReleased;
             }
 
-            // --- Decision d'engagement, SPECIFIQUE AU TYPE de carrefour ---------
-            // Deux familles de regulation, deux traitements :
-            //
-            //  * CONTINU (feu / ORCA / peloton) : on RE-EVALUE a chaque pas. Un feu
-            //    a des phases STABLES (re-evaluer capte le passage au rouge) ; ORCA
-            //    et le peloton MODULENT en continu (suivi d'un meneur virtuel) et
-            //    seraient "court-circuites" par un commit collant. -> PAS de commit
-            //    decisif a l'approche : on roule sur vert/voie libre, on cede sinon.
-            //
-            //  * DISCRET (priorite a droite / fixe / STOP / cede / P2P / AIM /
-            //    rond-point) : l'acceptation de creneau CLIGNOTE (le trafic croise
-            //    bouge). Sans engagement FERME, le vehicule hesite et se fige a la
-            //    ligne. -> une fois le creneau accepte (canPass) et proche, on
-            //    s'ENGAGE (commit) : on file, comme un vrai conducteur qui prend son
-            //    creneau. Le filet anti-collision (ordre VIN) reste le garde-fou.
-            //
-            // DILEMME (commun) : si je ne peux plus m'arreter AVANT la ligne meme en
-            // freinage d'urgence, je m'engage (freiner me figerait EN PLEIN
-            // carrefour). C'est la SEULE raison de franchir un rouge -> fini le
-            // commit aveugle a ~25 px qui ignorait le feu. Jamais pour un STOP non
-            // libere (on doit marquer l'arret).
+            // --- ENGAGEMENT : modele UNIFIE, re-evalue a CHAQUE pas -------------
+            // Plus aucun "commit collant" : c'est lui qui laissait les suiveurs
+            // passer EN FILE (sans verifier leur propre priorite), ignorait le
+            // passage au ROUGE et figeait le vehicule "engage". Regle unique :
+            //   j'entre SSI j'ai le droit de passage (canPass) ET je pourrai
+            //   DEGAGER la sortie (keep clear). Sinon je cede a la ligne.
+            // Exception DILEMME : si je ne peux plus m'arreter avant la ligne meme
+            // en freinage d'urgence, je passe (m'arreter me figerait EN PLEIN
+            // carrefour). Jamais pour un STOP non libere (je dois marquer l'arret).
             const RegulationType dtype = interAhead->getType();
-            const bool continuousCtrl  = (dtype == RegulationType::TRAFFIC_LIGHT  ||
-                                          dtype == RegulationType::ORCA           ||
-                                          dtype == RegulationType::VIRTUAL_PLATOON);
 
             const float v            = std::max(0.f, currentSpeed);
             const float bEmergency   = idm.params().bComf * 2.f;
             const float brakingDistE = (v * v) / (2.f * std::max(1.f, bEmergency));
             const float gapToLine    = std::max(0.f, distToInter - ctx.self.length / 2.f);
             const bool  cannotStop   = brakingDistE > gapToLine;
-            const bool  alreadyCommitted =
-                isCommittedToPass && committedIntersectionId == interAhead->getId();
 
-            if (canPass) {
-                // Creneau accepte. Pour un carrefour DISCRET, on s'engage fermement
-                // (anti-hesitation) une fois proche. Pour un feu / ORCA / peloton,
-                // on roule sans verrouiller (re-evaluation au pas suivant).
-                if (!continuousCtrl && distToInter < 60.f) {
-                    isCommittedToPass       = true;
-                    committedIntersectionId = interAhead->getId();
+            // Keep clear : la BOITE + la sortie sur MA trajectoire sont-elles
+            // degageables (aucun vehicule a l'ARRET dedans / juste apres) ? Sinon je
+            // n'entre pas -> anti-gridlock + empeche un suiveur de se figer au milieu.
+            // Uniquement les regulations a ARRET (feux/STOP/priorite) ; les schemas
+            // qui s'entrelacent gerent leur debit. Borne dans le temps -> jamais de
+            // famine (passe le delai, on cede au bris de cycle VIN du filet).
+            float sEnter = -1.f;
+            bool  exitBlocked = false;
+            {
+                const bool keepClearApplies =
+                    dtype == RegulationType::TRAFFIC_LIGHT  ||
+                    dtype == RegulationType::STOP           ||
+                    dtype == RegulationType::FIXED_PRIORITY ||
+                    dtype == RegulationType::PRIORITY_RIGHT ||
+                    dtype == RegulationType::YIELD;
+                if (keepClearApplies) {
+                    const float laneLen = currentLane->getLength();
+                    float sExit = -1.f;
+                    for (float ds = 0.f; ds < 240.f; ds += tileSize * 0.25f) {
+                        const float sp = std::min(s + ds, laneLen);
+                        const core::Vec2 lp = currentLane->getPositionAt(sp);
+                        const bool onI = (world.getIntersectionAt(lp.x, lp.y) != nullptr);
+                        if (sEnter < 0.f && onI) sEnter = sp;
+                        else if (sEnter >= 0.f && !onI) { sExit = sp; break; }
+                        if (sp >= laneLen) break;
+                    }
+                    if (sEnter >= 0.f && sExit > sEnter) {
+                        const float need = getLength() + idm.params().s0 + 4.f;
+                        bool blocked = false;
+                        for (const auto& other : agents) {
+                            if (!other || other.get() == this) continue;
+                            if (other->getSpeed() > 35.f) continue;   // fluide -> pas un bouchon
+                            const core::Vec2 od = other->getPosition() - position;
+                            if (od.x * od.x + od.y * od.y > 250.f * 250.f) continue;
+                            const LaneProjection pr =
+                                currentLane->project(other->getPosition(), sEnter, sExit + need);
+                            if (!pr.valid) continue;
+                            if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
+                            if (pr.s >= sEnter && pr.s <= sExit + need) { blocked = true; break; }
+                        }
+                        constexpr float kFixedDt          = 1.f / 60.f;
+                        constexpr float kKeepClearMaxWait = 4.f;
+                        if (blocked && keepClearWaited_ < kKeepClearMaxWait) {
+                            keepClearWaited_ += kFixedDt;
+                            exitBlocked = true;
+                        } else if (!blocked) {
+                            keepClearWaited_ = 0.f;
+                        }
+                    } else {
+                        keepClearWaited_ = 0.f;
+                    }
                 }
-            } else if (alreadyCommitted || (cannotStop && !isStopAhead)) {
-                // Point de non-retour franchi : on passe (jamais pour un STOP).
-                isCommittedToPass       = true;
-                committedIntersectionId = interAhead->getId();
+            }
+
+            const bool mayEnter = canPass && !exitBlocked;
+            const bool proceed  = mayEnter || (cannotStop && !isStopAhead);
+
+            if (proceed) {
+                // On passe. Aucun leader virtuel d'intersection : une fois
+                // PHYSIQUEMENT sur l'aire (interOn), le degagement est garanti.
             } else if (stopForceHalt) {
-                // Arret ferme PILE a la ligne : leader virtuel colle (gap 0).
+                // Arret ferme PILE a la ligne d'un STOP (gap 0, point FIXE).
                 leader            = core::behavior::LeaderInfo{};
                 leader.present    = true;
                 leader.gap        = 0.f;
                 leader.speed      = 0.f;
-                leader.stopTarget = true;   // point FIXE -> IDM sans time-headway
+                leader.stopTarget = true;
                 leaderIsVehicle   = false;
                 leaderFromStop    = true;
             } else if (decision.shouldStop) {
+                // Je cede : leader virtuel FIXE a la ligne d'arret.
                 core::behavior::LeaderInfo virtualLeader;
                 virtualLeader.present    = true;
                 virtualLeader.gap        = std::max(decision.stopLineGap, 0.f);
                 virtualLeader.speed      = 0.f;
-                virtualLeader.stopTarget = true;   // ligne d'arret FIXE
-
+                virtualLeader.stopTarget = true;
                 if (!leader.present || virtualLeader.gap < leader.gap) {
-                    leader = virtualLeader;
+                    leader          = virtualLeader;
                     leaderIsVehicle = false;
-                    if (interAhead->getType() == RegulationType::TRAFFIC_LIGHT) {
-                        leaderFromRed = true;
-                    } else if (interAhead->getType() == RegulationType::STOP) {
-                        leaderFromStop = true;
-                    } else if (interAhead->getType() == RegulationType::P2P) {
-                        leaderFromP2P = true;
-                    } else {
-                        leaderFromYield = true;
-                    }
+                    if      (dtype == RegulationType::TRAFFIC_LIGHT) leaderFromRed   = true;
+                    else if (dtype == RegulationType::STOP)          leaderFromStop  = true;
+                    else if (dtype == RegulationType::P2P)           leaderFromP2P   = true;
+                    else                                             leaderFromYield = true;
+                }
+            } else if (exitBlocked) {
+                // Droit de passage MAIS sortie pleine : j'attends a la ligne
+                // d'ENTREE plutot que de bloquer la boite (et les flux croises).
+                core::behavior::LeaderInfo box;
+                box.present    = true;
+                box.gap        = (sEnter >= 0.f)
+                                 ? std::max((sEnter - s) - getLength() / 2.f, 0.f) : 0.f;
+                box.speed      = 0.f;
+                box.stopTarget = true;
+                if (!leader.present || box.gap < leader.gap) {
+                    leader          = box;
+                    leaderIsVehicle = false;
+                    leaderFromBox   = true;
                 }
             }
 
@@ -548,81 +588,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 }
             }
 
-            // --- Anti-GRIDLOCK : "keep clear" / ne pas bloquer le carrefour ----
-            // Un carrefour sature degenere en blocage mutuel (spillback) quand des
-            // vehicules s'engagent alors que leur SORTIE est deja pleine : ils se
-            // figent SUR l'aire de conflit et verrouillent les flux croises. Regle
-            // du code de la route ("ne pas s'engager si on ne peut pas degager") :
-            // si un vehicule LENT occupe ma voie juste APRES le carrefour, je
-            // m'arrete a la LIGNE plutot qu'au milieu.
-            // PORTEE : uniquement les regulations a ARRET (feux / STOP / priorite),
-            // ou le spillback est le vrai mode de panne. Les schemas qui s'auto-
-            // organisent en s'ENTRELACANT (P2P, AIM, ORCA, rond-point, peloton)
-            // gerent deja leur debit ; une retenue "sortie occupee" combat leur flux
-            // continu et peut les FAMINER. On ne l'y applique donc pas.
-            const RegulationType itype = interAhead->getType();
-            const bool keepClearApplies =
-                itype == RegulationType::TRAFFIC_LIGHT  ||
-                itype == RegulationType::STOP           ||
-                itype == RegulationType::FIXED_PRIORITY ||
-                itype == RegulationType::PRIORITY_RIGHT ||
-                itype == RegulationType::YIELD;
-            // LIVENESS : meme sur ces types, "keep clear" seul pourrait FAMINER. On
-            // le borne dans le temps : passe kKeepClearMaxWait, on cesse de retenir
-            // et on laisse le filet anti-collision + l'ordre total par VIN casser le
-            // cycle (le plus petit VIN finit toujours par avancer). Toute scene
-            // FINIT donc par se vider. N'AJOUTE que du freinage -> sur.
-            if (keepClearApplies && currentLane && !isCommittedToPass &&
-                overtakeState == OvertakeState::NONE) {
-                const float laneLen = currentLane->getLength();
-                // Abscisses d'ENTREE et de SORTIE du carrefour sur ma trajectoire.
-                float sEnter = -1.f, sExit = -1.f;
-                for (float ds = 0.f; ds < 240.f; ds += tileSize * 0.25f) {
-                    const float sp = std::min(s + ds, laneLen);
-                    const core::Vec2 lp = currentLane->getPositionAt(sp);
-                    const bool onInter = (world.getIntersectionAt(lp.x, lp.y) != nullptr);
-                    if (sEnter < 0.f && onInter) sEnter = sp;
-                    else if (sEnter >= 0.f && !onInter) { sExit = sp; break; }
-                    if (sp >= laneLen) break;
-                }
-                if (sEnter >= 0.f && sExit > sEnter) {
-                    const float need = getLength() + idm.params().s0 + 4.f; // place a degager
-                    bool blocked = false;
-                    for (const auto& other : agents) {
-                        if (!other || other.get() == this) continue;
-                        if (other->getSpeed() > 35.f) continue;       // fluide -> pas un bouchon
-                        const core::Vec2 od = other->getPosition() - position;
-                        if (od.x * od.x + od.y * od.y > 250.f * 250.f) continue; // trop loin
-                        const LaneProjection pr =
-                            currentLane->project(other->getPosition(), sExit, sExit + need);
-                        if (!pr.valid) continue;
-                        if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
-                        if (pr.s >= sExit - 1.f && pr.s <= sExit + need) { blocked = true; break; }
-                    }
-                    constexpr float kFixedDt          = 1.f / 60.f;
-                    constexpr float kKeepClearMaxWait = 4.f;   // s avant de ceder au cycle-breaker
-                    if (blocked && keepClearWaited_ < kKeepClearMaxWait) {
-                        keepClearWaited_ += kFixedDt;
-                        core::behavior::LeaderInfo box;
-                        box.present    = true;
-                        box.gap        = std::max((sEnter - s) - getLength() / 2.f, 0.f);
-                        box.speed      = 0.f;
-                        box.stopTarget = true;             // ligne FIXE -> arret net
-                        if (!leader.present || box.gap < leader.gap) {
-                            leader          = box;
-                            leaderIsVehicle = false;
-                            leaderFromBox   = true;
-                            isCommittedToPass = false;     // on attend a la ligne
-                        }
-                    } else if (!blocked) {
-                        keepClearWaited_ = 0.f;            // sortie degagee -> reset
-                    }
-                    // blocked && timer>=max : on NE retient PAS (anti-famine) et on
-                    // garde le timer haut (pas de reset) tant qu'on est au carrefour.
-                } else {
-                    keepClearWaited_ = 0.f;               // pas de carrefour devant
-                }
-            }
+            // (keep clear : calcule plus haut -> integre directement a la decision
+            //  d'engagement via 'exitBlocked', donc plus de bloc separe ici.)
         }
     }
 
