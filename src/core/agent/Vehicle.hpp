@@ -73,6 +73,11 @@ protected:
     float stopHeldTime              = 0.f;
     bool  stopReleased              = false;
 
+    // Anti-gridlock "keep clear" : temps cumule d'attente a la ligne parce que la
+    // SORTIE du carrefour est occupee. Borne (cf. computeDecision) pour garantir
+    // la liveness -> passe le seuil, on cede au bris de cycle par VIN.
+    float keepClearWaited_          = 0.f;
+
     // Etat depassement (offset lateral transitoire vs Lane curvilineaire).
     enum class OvertakeState { NONE, OVERTAKING, RETURNING };
     OvertakeState overtakeState  = OvertakeState::NONE;

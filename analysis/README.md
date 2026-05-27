@@ -5,6 +5,17 @@ volontairement decouple du moteur C++ : le moteur **produit des donnees**
 (CSV/JSON via `MetricsCollector` et `ExperimentRunner`/`simbench`), cette couche
 les **interprete et trace**.
 
+## Contenu
+
+- **`report.ipynb`** — rapport scientifique complet (état de l'art, modèles
+  IDM/MOBIL/Frenet, stratégies d'intersection, architecture, bugs corrigés,
+  figures). Exécutable tel quel : si les CSV réels sont absents, les figures
+  affichent des **données synthétiques étiquetées**.
+- **`_build_report.py`** — générateur du notebook (éditez-y le texte, relancez
+  `python analysis/_build_report.py`).
+- **`INTEGRATION.md`** — checklist : quels CSV produire, quels visuels capturer
+  et sous quels noms les déposer (`data/`, `figures/`).
+
 ## Pipeline cible (CI/CD)
 
 Le job `report` de `.github/workflows/main.yml` (aujourd'hui un squelette

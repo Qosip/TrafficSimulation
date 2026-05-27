@@ -366,6 +366,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         isCommittedToPass       = true;
         committedIntersectionId = interOn->getId();
         wasOnCommittedInter     = true;          // on est PHYSIQUEMENT dessus
+        keepClearWaited_        = 0.f;            // franchi -> timer keep-clear neuf
     } else if (isCommittedToPass && wasOnCommittedInter) {
         // On ne libere QU'APRES avoir reellement traverse (etre passe SUR
         // l'intersection puis en etre ressorti). Sinon, un vehicule qui vient
@@ -455,13 +456,32 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 canPass = stopReleased;
             }
 
-            // Zone de DILEMME : puis-je encore m'arreter AVANT la ligne, meme en
-            // freinage d'urgence ? Si NON, je dois m'engager (freiner stopperait ma
-            // carrosserie EN PLEIN carrefour). Si OUI, je RESPECTE le signal, quitte
-            // a freiner ferme -> aucun franchissement de feu rouge "alors qu'on avait
-            // le temps" (c'etait le bug : un commit aveugle a ~25 px ignorait le
-            // rouge). Le commit n'est PAS pose sur vert : interOn le posera une fois
-            // physiquement sur l'aire (garantit qu'on degage un carrefour entame).
+            // --- Decision d'engagement, SPECIFIQUE AU TYPE de carrefour ---------
+            // Deux familles de regulation, deux traitements :
+            //
+            //  * CONTINU (feu / ORCA / peloton) : on RE-EVALUE a chaque pas. Un feu
+            //    a des phases STABLES (re-evaluer capte le passage au rouge) ; ORCA
+            //    et le peloton MODULENT en continu (suivi d'un meneur virtuel) et
+            //    seraient "court-circuites" par un commit collant. -> PAS de commit
+            //    decisif a l'approche : on roule sur vert/voie libre, on cede sinon.
+            //
+            //  * DISCRET (priorite a droite / fixe / STOP / cede / P2P / AIM /
+            //    rond-point) : l'acceptation de creneau CLIGNOTE (le trafic croise
+            //    bouge). Sans engagement FERME, le vehicule hesite et se fige a la
+            //    ligne. -> une fois le creneau accepte (canPass) et proche, on
+            //    s'ENGAGE (commit) : on file, comme un vrai conducteur qui prend son
+            //    creneau. Le filet anti-collision (ordre VIN) reste le garde-fou.
+            //
+            // DILEMME (commun) : si je ne peux plus m'arreter AVANT la ligne meme en
+            // freinage d'urgence, je m'engage (freiner me figerait EN PLEIN
+            // carrefour). C'est la SEULE raison de franchir un rouge -> fini le
+            // commit aveugle a ~25 px qui ignorait le feu. Jamais pour un STOP non
+            // libere (on doit marquer l'arret).
+            const RegulationType dtype = interAhead->getType();
+            const bool continuousCtrl  = (dtype == RegulationType::TRAFFIC_LIGHT  ||
+                                          dtype == RegulationType::ORCA           ||
+                                          dtype == RegulationType::VIRTUAL_PLATOON);
+
             const float v            = std::max(0.f, currentSpeed);
             const float bEmergency   = idm.params().bComf * 2.f;
             const float brakingDistE = (v * v) / (2.f * std::max(1.f, bEmergency));
@@ -471,7 +491,13 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 isCommittedToPass && committedIntersectionId == interAhead->getId();
 
             if (canPass) {
-                // Voie libre (vert / gap accepte) : on roule.
+                // Creneau accepte. Pour un carrefour DISCRET, on s'engage fermement
+                // (anti-hesitation) une fois proche. Pour un feu / ORCA / peloton,
+                // on roule sans verrouiller (re-evaluation au pas suivant).
+                if (!continuousCtrl && distToInter < 60.f) {
+                    isCommittedToPass       = true;
+                    committedIntersectionId = interAhead->getId();
+                }
             } else if (alreadyCommitted || (cannotStop && !isStopAhead)) {
                 // Point de non-retour franchi : on passe (jamais pour un STOP).
                 isCommittedToPass       = true;
@@ -528,10 +554,26 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // figent SUR l'aire de conflit et verrouillent les flux croises. Regle
             // du code de la route ("ne pas s'engager si on ne peut pas degager") :
             // si un vehicule LENT occupe ma voie juste APRES le carrefour, je
-            // m'arrete a la LIGNE plutot qu'au milieu. Sauf si je suis deja engage
-            // (committed) : reculer la dedans empirerait le blocage.
-            // N.B. : n'AJOUTE que du freinage (leader plus contraignant) -> sur.
-            if (currentLane && !isCommittedToPass && overtakeState == OvertakeState::NONE) {
+            // m'arrete a la LIGNE plutot qu'au milieu.
+            // PORTEE : uniquement les regulations a ARRET (feux / STOP / priorite),
+            // ou le spillback est le vrai mode de panne. Les schemas qui s'auto-
+            // organisent en s'ENTRELACANT (P2P, AIM, ORCA, rond-point, peloton)
+            // gerent deja leur debit ; une retenue "sortie occupee" combat leur flux
+            // continu et peut les FAMINER. On ne l'y applique donc pas.
+            const RegulationType itype = interAhead->getType();
+            const bool keepClearApplies =
+                itype == RegulationType::TRAFFIC_LIGHT  ||
+                itype == RegulationType::STOP           ||
+                itype == RegulationType::FIXED_PRIORITY ||
+                itype == RegulationType::PRIORITY_RIGHT ||
+                itype == RegulationType::YIELD;
+            // LIVENESS : meme sur ces types, "keep clear" seul pourrait FAMINER. On
+            // le borne dans le temps : passe kKeepClearMaxWait, on cesse de retenir
+            // et on laisse le filet anti-collision + l'ordre total par VIN casser le
+            // cycle (le plus petit VIN finit toujours par avancer). Toute scene
+            // FINIT donc par se vider. N'AJOUTE que du freinage -> sur.
+            if (keepClearApplies && currentLane && !isCommittedToPass &&
+                overtakeState == OvertakeState::NONE) {
                 const float laneLen = currentLane->getLength();
                 // Abscisses d'ENTREE et de SORTIE du carrefour sur ma trajectoire.
                 float sEnter = -1.f, sExit = -1.f;
@@ -549,13 +591,18 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     for (const auto& other : agents) {
                         if (!other || other.get() == this) continue;
                         if (other->getSpeed() > 35.f) continue;       // fluide -> pas un bouchon
+                        const core::Vec2 od = other->getPosition() - position;
+                        if (od.x * od.x + od.y * od.y > 250.f * 250.f) continue; // trop loin
                         const LaneProjection pr =
                             currentLane->project(other->getPosition(), sExit, sExit + need);
                         if (!pr.valid) continue;
                         if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
                         if (pr.s >= sExit - 1.f && pr.s <= sExit + need) { blocked = true; break; }
                     }
-                    if (blocked) {
+                    constexpr float kFixedDt          = 1.f / 60.f;
+                    constexpr float kKeepClearMaxWait = 4.f;   // s avant de ceder au cycle-breaker
+                    if (blocked && keepClearWaited_ < kKeepClearMaxWait) {
+                        keepClearWaited_ += kFixedDt;
                         core::behavior::LeaderInfo box;
                         box.present    = true;
                         box.gap        = std::max((sEnter - s) - getLength() / 2.f, 0.f);
@@ -565,10 +612,15 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             leader          = box;
                             leaderIsVehicle = false;
                             leaderFromBox   = true;
-                            // On annule un eventuel commit premature : on attend.
-                            isCommittedToPass = false;
+                            isCommittedToPass = false;     // on attend a la ligne
                         }
+                    } else if (!blocked) {
+                        keepClearWaited_ = 0.f;            // sortie degagee -> reset
                     }
+                    // blocked && timer>=max : on NE retient PAS (anti-famine) et on
+                    // garde le timer haut (pas de reset) tant qu'on est au carrefour.
+                } else {
+                    keepClearWaited_ = 0.f;               // pas de carrefour devant
                 }
             }
         }
@@ -595,12 +647,27 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             if (forwardDist <= 0.f) continue;                       // derriere moi
 
             const float lateral      = std::abs(dp.x * (-fwd.y) + dp.y * fwd.x);
-            const float otherHalfLen = other->getLength() / 2.f;
-            // Couloir = ma demi-largeur + l'empreinte de l'autre (croise => sa
-            // longueur barre ma voie) + petite marge laterale.
-            if (lateral > myHalfWidth + otherHalfLen + 3.f) continue;
+            const float headingDiff =
+                std::abs(core::math::wrapDeg180(other->getHeading() - currentAngle));
+            // Empreinte de l'autre dans MON repere = projection de sa boite ORIENTEE
+            // (longueur L, largeur W, cap relatif theta) sur mes axes :
+            //   lateral  = (L/2)|sin t| + (W/2)|cos t|
+            //   longi    = (L/2)|cos t| + (W/2)|sin t|
+            // -> meme sens OU sens inverse (parallele, t≈0 ou π) : empreinte
+            //    laterale = LARGEUR (un camion long sur la voie d'a cote ne barre
+            //    PAS la mienne) ; CROISE (t≈π/2) : empreinte laterale = LONGUEUR
+            //    (le corps du camion barre vraiment ma voie). Corrige le cas ou un
+            //    camion (long de 80 px) bloquait les voitures d'une AUTRE voie.
+            const float thRad      = headingDiff * core::math::DEG2RAD;
+            const float oc         = std::abs(std::cos(thRad));
+            const float os         = std::abs(std::sin(thRad));
+            const float otherHalfL = other->getLength() / 2.f;       // = bodySize.x/2
+            const float otherHalfW = other->getBodySize().y / 2.f;
+            const float otherLatExtent = otherHalfL * os + otherHalfW * oc;
+            const float otherLonExtent = otherHalfL * oc + otherHalfW * os;
+            if (lateral > myHalfWidth + otherLatExtent + 3.f) continue;
 
-            const float bumper = forwardDist - myHalfLen - otherHalfLen;
+            const float bumper = forwardDist - myHalfLen - otherLonExtent;
 
             // Composante de vitesse de l'autre le long de MON cap (croise -> ~0).
             const float oRad      = other->getHeading() * core::math::DEG2RAD;
@@ -623,8 +690,6 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // carrefour), le plus petit VIN ne cede a personne -> il avance et
             // brise le blocage. Resout les cycles a N vehicules, pas seulement les
             // paires (c'etait la limite de la version precedente).
-            const float headingDiff =
-                std::abs(core::math::wrapDeg180(other->getHeading() - currentAngle));
             // En DEPASSEMENT, un vehicule quasi-oppose (>135°) est un FRONTAL sur
             // la voie d'en face : l'ordre par VIN ne s'y applique pas (un frontal
             // ne se "negocie" pas). Je freine TOUJOURS -> jamais de collision tete-
@@ -872,6 +937,7 @@ void Vehicle::resetToStart(const World& world) {
     currentStopIntersectionId = -1;
     stopHeldTime         = 0.f;
     stopReleased         = false;
+    keepClearWaited_     = 0.f;
 
     const auto fullPath = AStarPlanner::findPath(world, startTile, goalTile);
     if (!fullPath.empty()) {

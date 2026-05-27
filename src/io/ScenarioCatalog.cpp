@@ -283,16 +283,34 @@ void buildBreakdown(std::unique_ptr<World>& world, AgentVec& agents) {
 
 void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
     agents.clear();
-    constexpr int N = 80;
-    world = std::make_unique<World>(N, N, TS);
+    // Carte RECTANGULAIRE (pas carree) -> deja moins "grille parfaite".
+    constexpr int W = 92, H = 72;
+    world = std::make_unique<World>(W, H, TS);
     World& w = *world;
 
-    // Maillage regulier : 10 axes H + 10 axes V (espacement 8 tiles) -> 100
-    // carrefours, tous modes confondus pour montrer l'heterogeneite et tester
-    // la scalabilite (>1000 agents) + l'anti-gridlock a grande echelle.
-    const int lines[10] = {4, 12, 20, 28, 36, 44, 52, 60, 68, 76};
-    for (int r : lines) buildHRoad(w, r, 0, N - 1);
-    for (int c : lines) buildVRoad(w, c, 0, N - 1);
+    // --- Reseau IRREGULIER ---------------------------------------------------
+    // Espacement NON uniforme des axes -> blocs de tailles variees (quartiers).
+    // Toutes les artères traversent (réseau pleinement connecté pour l'A*), mais
+    // l'irrégularité + les ronds-points cassent l'aspect "damier".
+    const int rows[7] = {5, 14, 22, 33, 45, 55, 65};
+    const int cols[8] = {6, 15, 25, 38, 50, 60, 72, 84};
+    const int nR = 7, nC = 8;
+    for (int i = 0; i < nR; ++i) buildHRoad(w, rows[i], 0, W - 1);
+    for (int j = 0; j < nC; ++j) buildVRoad(w, cols[j], 0, H - 1);
+
+    // --- Ronds-points de tailles VARIEES (côté 4 / 6 / 8) --------------------
+    // Placés sur certains croisements (indices col, ligne) ; centre (C,R) ->
+    // coin haut-gauche (C - side/2, R - side/2). Le reste = carrefours, modes
+    // alternés (priorité / feux / STOP / fixe / P2P / AIM) pour l'hétérogénéité.
+    struct RB { int ci, ri, side; };
+    const RB rbs[6] = {
+        {1, 1, 6}, {4, 0, 4}, {2, 3, 8},
+        {5, 4, 6}, {6, 2, 4}, {3, 5, 6}
+    };
+    auto roundaboutSide = [&](int ci, int ri) -> int {
+        for (const auto& rb : rbs) if (rb.ci == ci && rb.ri == ri) return rb.side;
+        return 0;
+    };
 
     const RegulationType cyc[6] = {
         RegulationType::PRIORITY_RIGHT, RegulationType::TRAFFIC_LIGHT,
@@ -300,16 +318,21 @@ void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
         RegulationType::P2P,            RegulationType::AIM
     };
     int id = 1, k = 0;
-    for (int r : lines)
-        for (int c : lines)
-            buildCrossroad(w, c, r, id++, cyc[k++ % 6]);
+    for (int ri = 0; ri < nR; ++ri)
+        for (int ci = 0; ci < nC; ++ci) {
+            const int C = cols[ci], R = rows[ri];
+            const int side = roundaboutSide(ci, ri);
+            if (side > 0) buildRoundabout(w, C - side / 2, R - side / 2, id++, side);
+            else          buildCrossroad(w, C, R, id++, cyc[k++ % 6]);
+        }
+    w.refreshRoundaboutApproaches();   // (idempotent) recalcule les branches
 
     // Points de spawn = toutes les tiles de route (hors carrefour). On tire des
     // paires (depart, arrivee) reproductibles et on garde les trajets non
     // triviaux. Tirage seede -> scene identique a chaque lancement.
     std::vector<core::TileCoord> roadTiles;
-    for (int x = 0; x < N; ++x)
-        for (int y = 0; y < N; ++y) {
+    for (int x = 0; x < W; ++x)
+        for (int y = 0; y < H; ++y) {
             const RoadType rt = w.getTile(x, y).roadType;
             if (rt != RoadType::NONE && rt != RoadType::INTERSECTION)
                 roadTiles.push_back({x, y});
@@ -317,9 +340,9 @@ void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
 
     core::Rng rng(0xC17C0DE5ULL);
     std::unordered_set<long long> usedStart;
-    auto key = [N](core::TileCoord t) { return (long long)t.y * N + t.x; };
+    auto key = [W](core::TileCoord t) { return (long long)t.y * W + t.x; };
 
-    constexpr int kTargetVehicles = 1000;
+    constexpr int kTargetVehicles = 500;
     int spawned = 0, guard = 0;
     while (spawned < kTargetVehicles && guard < kTargetVehicles * 12) {
         ++guard;
@@ -440,12 +463,13 @@ std::vector<ScenarioDef> makeCatalog() {
         "16 carrefours (feux / priorite / STOP) + grand rond-point central, "
         "depassements et convois : panorama general des comportements.",
         [](std::unique_ptr<World>& w, AgentVec& a) { buildDemoScenario(w, a, TS); });
-    add("Ville XXXXL (~1000 vehicules)", "Massif",
-        "100 carrefours (grille 80x80) tous modes confondus, ~1000 vehicules "
-        "actifs : demonstration de scalabilite (multithreading + partitionnement "
-        "spatial) et de l'anti-gridlock 'keep clear'. Le chargement (calcul des "
-        "trajets A*) peut prendre quelques secondes ; dezoomez a la molette pour "
-        "embrasser toute la ville.",
+    add("Ville XXXXL (~500 vehicules, reseau irregulier)", "Massif",
+        "Ville 92x72 a maillage IRREGULIER (blocs de tailles variees) avec 6 "
+        "ronds-points de tailles differentes (cote 4/6/8) parmi ~50 carrefours "
+        "tous modes confondus, ~500 vehicules actifs : scalabilite "
+        "(multithreading + partitionnement spatial) et anti-gridlock 'keep clear'. "
+        "Le chargement (trajets A*) peut prendre quelques secondes ; dezoomez a la "
+        "molette pour embrasser toute la ville.",
         buildCityXXXXL);
 
     return cat;
