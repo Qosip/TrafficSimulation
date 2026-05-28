@@ -538,7 +538,14 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                         if (sp >= laneLen) break;
                     }
                     if (sEnter >= 0.f && sExit > sEnter) {
+                        // FULL-BODY FIT : interdire l'engagement si ma carrosserie
+                        // ne tient pas en entier dans la boite + sortie. need
+                        // couvre longueur + s0 + petite marge. Si sExit + need
+                        // depasse la fin de la voie (cas degenere : route trop
+                        // courte apres la boite), on attend -- mieux vaut
+                        // patienter que se figer mi-engage.
                         const float need = getLength() + idm.params().s0 + 4.f;
+                        if (sExit + need > laneLen) { exitBlocked = true; }
                         // Borne basse de la fenetre surveillee. Carrefour : depuis
                         // l'ENTREE (on veut la boite ELLE-MEME degagee). Rond-point :
                         // depuis la SORTIE seulement (on ignore l'arc circulant).
@@ -802,6 +809,21 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             const float margin = 6.f + 0.25f * closing;
             if (bumper >= margin) continue;                         // pas imminent
 
+            // --- EXCLUSIVITE EN BOITE (commit-to-clear strict) ---------------
+            // Regle : une fois PHYSIQUEMENT engage sur l'aire d'intersection
+            // (dbgOnInter_), je ne dois freiner QUE pour un leader same-direction
+            // sur MA TRAJECTOIRE (file de sortie qui ralentit). Tout corps croise
+            // / oppose / en virage DANS la boite est ignore -- la priorite a ete
+            // jouee a l'entree (canEnter), une fois dedans on degage coute que
+            // coute. Sinon : je freine pour un perpendiculaire qui passe ->
+            // wedge mutuel insoluble.
+            // GARDE imminent-crash : bumper tres petit (kHardMin) -> on freine
+            // quand meme (collision absolue prime sur fluidite).
+            constexpr float kBoxHardMin = 4.f;
+            if (dbgOnInter_ && bumper > kBoxHardMin && headingDiff > 45.f) {
+                continue;                                            // cross/oppose en boite -> ignore
+            }
+
             // --- FAUX LEADER cross-lane (anti-blocage en/apres intersection) ---
             // Le check d'empreinte ci-dessus capture un perpendiculaire QUI VIT
             // dans la boite ou la borde -- meme si son corps n'est PAS sur ma
@@ -990,7 +1012,11 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         // (un creep a 6 px/s pourrait re-stuck immediatement -> on garde le
         // compteur en hysteresis).
 
-        constexpr float kDeadlockGrace = 1.2f;   // s avant declenchement
+        // Grace tres reduite QUAND je suis sur l'aire d'intersection : un fige
+        // dans la boite paralyse tous les flux croises -> declenchement quasi
+        // immediat (0.35 s). Hors boite, grace standard (1.2 s) pour ne pas
+        // declencher trop tot sur un freinage de file legitime.
+        const float kDeadlockGrace = dbgOnInter_ ? 0.35f : 1.2f;
         if (deadlockStuckTime_ > kDeadlockGrace && currentLane) {
             // Inspection : qu'est-ce qui me barre la voie ?
             constexpr float kClearScan = 70.f;
@@ -1016,7 +1042,14 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             }
 
             bool forceAdvance = false;
-            if (laneAheadClear) {
+            // EN BOITE : declenchement INCONDITIONNEL apres grace. Une fois
+            // dans la boite, peu importe qui me barre la voie, je DOIS sortir
+            // (sinon je paralyse toutes les approches croisees). Aucune
+            // arbitrage VIN : tout le monde en boite force a la fois -> le
+            // wedge se desserre.
+            if (dbgOnInter_) {
+                forceAdvance = true;
+            } else if (laneAheadClear) {
                 forceAdvance = true;                                  // MODE A
             } else if (blocker && blocker->getSpeed() < 8.f) {
                 // MODE B : wedge mutuel. VIN-arbitrage sur tout le cluster
