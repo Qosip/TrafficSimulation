@@ -951,14 +951,25 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         currentBlockReason = BlockReason::NONE;
     }
 
-    // --- Deadlock auto-recovery (DERNIER recours) ---------------------------
-    // Filet ultime contre les cycles non resolus par le bris VIN (gel rotatif
-    // a N vehicules, P2P pathologique, faux leader cross-lane non rattrape par
-    // le filtre ci-dessus). Regle : si je suis immobile depuis > kDeadlockGrace
-    // SANS qu'aucun corps reel ne barre PHYSIQUEMENT ma voie, je force un creep.
-    // L'autre suiveur reprend, puis ainsi de suite -> cycle brise.
-    // Ignore les attentes LEGITIMES (feu rouge, STOP, peloton, depassement, panne) :
-    // un agent qui attend correctement un signal ne doit pas etre debloque.
+    // --- Deadlock auto-recovery (AGRESSIVE) ---------------------------------
+    // Aucun blocage mutuel ne doit durer plus de quelques secondes. Deux modes :
+    //
+    //   MODE A -- ma voie est PHYSIQUEMENT vide devant : creep immediat.
+    //             (typique : cycle rotatif non resolu, faux leader cross-lane
+    //              residuel, attente fantome.)
+    //
+    //   MODE B -- un corps BLOQUE ma voie ET ce corps est lui-meme A L'ARRET
+    //             (mutual wedge dans/autour la boite : croises figes l'un
+    //             contre l'autre, opposes nez-a-nez, deux turners qui se
+    //             coupent). VIN-arbitrage : si j'ai le plus PETIT VIN du
+    //             cluster fige, je force le passage MEME si cela signifie
+    //             traverser brievement la boite de l'autre. Le plus GROS VIN
+    //             attend -- des que je passe, il se libere naturellement.
+    //             Sans cela, le wedge geometrique est indeblocable (le bumper
+    //             tend vers 0 -> brake reciproque permanent).
+    //
+    // Attentes LEGITIMES (feu rouge, STOP, peloton, depass, panne) : exclues
+    // -- un agent qui attend correctement un signal ne doit pas etre force.
     {
         constexpr float kFixedDt = 1.f / 60.f;
         const bool legitWait =
@@ -971,15 +982,20 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             currentBlockReason == BlockReason::NO_PATH;
         if (!legitWait && currentSpeed < 5.f && pendingAccel < 1.f) {
             deadlockStuckTime_ += kFixedDt;
-        } else {
+        } else if (currentSpeed > 12.f) {
+            // Vraiment en mouvement -> reset.
             deadlockStuckTime_ = 0.f;
         }
+        // Note : ne PAS reset si seulement currentSpeed > 5 sans bouger franchement
+        // (un creep a 6 px/s pourrait re-stuck immediatement -> on garde le
+        // compteur en hysteresis).
 
-        constexpr float kDeadlockGrace = 4.0f;   // s avant declenchement
+        constexpr float kDeadlockGrace = 1.2f;   // s avant declenchement
         if (deadlockStuckTime_ > kDeadlockGrace && currentLane) {
-            // Aucun corps reel sur MA trajectoire devant moi ?
+            // Inspection : qu'est-ce qui me barre la voie ?
             constexpr float kClearScan = 70.f;
-            bool laneAheadClear = true;
+            bool        laneAheadClear = true;
+            const IAgent* blocker     = nullptr;
             for (const auto& other : agents) {
                 if (!other || other.get() == this) continue;
                 const core::Vec2 dp = other->getPosition() - position;
@@ -991,17 +1007,49 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 if (std::abs(pr.lateral) >
                     visionParams.laneCorridorHalf + 6.f) continue;
                 laneAheadClear = false;
-                break;
+                // On retient le PLUS PROCHE comme bloqueur principal.
+                if (!blocker ||
+                    (other->getPosition() - position).length() <
+                    (blocker->getPosition() - position).length()) {
+                    blocker = other.get();
+                }
             }
+
+            bool forceAdvance = false;
             if (laneAheadClear) {
-                // Creep d'urgence : sortie d'arret en ~0.5s, casse le cycle.
-                pendingAccel        = std::max(pendingAccel,
-                                               idm.params().aMax * 0.7f);
+                forceAdvance = true;                                  // MODE A
+            } else if (blocker && blocker->getSpeed() < 8.f) {
+                // MODE B : wedge mutuel. VIN-arbitrage sur tout le cluster
+                // d'agents stationnaires autour de nous : suis-je le plus
+                // petit VIN ? Sinon -> j'attends, le petit VIN forcera.
+                const int myVin = getVehicleId();
+                bool isSmallestStuckVin = true;
+                for (const auto& other : agents) {
+                    if (!other || other.get() == this) continue;
+                    if (other->getSpeed() > 8.f) continue;            // bouge -> hors cluster
+                    const core::Vec2 dp = other->getPosition() - position;
+                    if (dp.x * dp.x + dp.y * dp.y > 95.f * 95.f) continue;
+                    const int oVin = other->getVehicleId();
+                    if (oVin >= 0 && (myVin < 0 || oVin < myVin)) {
+                        isSmallestStuckVin = false;
+                        break;
+                    }
+                }
+                if (isSmallestStuckVin) forceAdvance = true;
+            }
+
+            if (forceAdvance) {
+                // Override absolu : on neutralise tout frein (safety net, IDM,
+                // stopForceHalt residuel) et on impose un creep franc. Bornes
+                // basses (40 px/s) suffisent a degager le wedge en ~0.5 s sans
+                // creer de pic de vitesse dangereux.
+                pendingAccel        = std::max(idm.params().aMax * 0.8f,
+                                               pendingAccel);
                 pendingDesiredSpeed = std::max(pendingDesiredSpeed, 40.f);
                 currentBlockReason  = BlockReason::NONE;
-                // Decremente sans reset complet : si on retombe stuck, on
-                // redeclenche assez vite (et non apres 4s pleines).
-                deadlockStuckTime_  = std::max(0.f, deadlockStuckTime_ - 1.5f);
+                // Hysteresis : decrement plutot que reset complet, pour
+                // redeclencher rapidement si le wedge persiste sur le pas suivant.
+                deadlockStuckTime_  = std::max(0.f, deadlockStuckTime_ - 0.6f);
             }
         }
     }
