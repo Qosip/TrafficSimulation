@@ -994,31 +994,36 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     // -- un agent qui attend correctement un signal ne doit pas etre force.
     {
         constexpr float kFixedDt = 1.f / 60.f;
+        // Liste DRASTIQUEMENT reduite : seules les vraies attentes immuables
+        // (panne, but, no_path) et le rouge restent. Les ex-"legitimes"
+        // (STOP, PLATOONING, OVERTAKING) etaient des trous : un blocage
+        // pathologique deguise en l'un d'eux ne se debloquait jamais.
         const bool legitWait =
             currentBlockReason == BlockReason::INTERSECTION_RED  ||
-            currentBlockReason == BlockReason::INTERSECTION_STOP ||
-            currentBlockReason == BlockReason::PLATOONING        ||
-            currentBlockReason == BlockReason::OVERTAKING        ||
             currentBlockReason == BlockReason::BREAKDOWN         ||
             currentBlockReason == BlockReason::AT_GOAL           ||
             currentBlockReason == BlockReason::NO_PATH;
-        if (!legitWait && currentSpeed < 5.f && pendingAccel < 1.f) {
+        // Condition d'accumulation TRES LARGE : tout proche de l'arret compte,
+        // peu importe le pendingAccel. (L'ancien `pendingAccel<1` ratait les
+        // frames ou le force-advance precedent avait mis pendingAccel haut puis
+        // ou l'IDM ramenait juste apres en negatif violent.)
+        if (!legitWait && currentSpeed < 8.f) {
             deadlockStuckTime_ += kFixedDt;
-        } else if (currentSpeed > 12.f) {
-            // Vraiment en mouvement -> reset.
+        } else if (currentSpeed > 15.f) {
             deadlockStuckTime_ = 0.f;
         }
-        // Note : ne PAS reset si seulement currentSpeed > 5 sans bouger franchement
-        // (un creep a 6 px/s pourrait re-stuck immediatement -> on garde le
-        // compteur en hysteresis).
 
-        // Grace tres reduite QUAND je suis sur l'aire d'intersection : un fige
-        // dans la boite paralyse tous les flux croises -> declenchement quasi
-        // immediat (0.35 s). Hors boite, grace standard (1.2 s) pour ne pas
-        // declencher trop tot sur un freinage de file legitime.
-        const float kDeadlockGrace = dbgOnInter_ ? 0.35f : 1.2f;
+        // Grace agressive. En boite : 0.2 s (paralyser les flux croises est
+        // INACCEPTABLE). Hors boite : 0.7 s (assez court pour ne pas faire
+        // attendre l'utilisateur, assez long pour qu'une file IDM normale
+        // n'oscille pas).
+        const float kDeadlockGrace = dbgOnInter_ ? 0.2f : 0.7f;
         if (deadlockStuckTime_ > kDeadlockGrace && currentLane) {
-            // Inspection : qu'est-ce qui me barre la voie ?
+            // Inspection : qu'est-ce qui me barre VRAIMENT la voie ?
+            // CRITERE STRICT : SAME-DIRECTION uniquement. Un perpendiculaire /
+            // oppose dans la boite traverse PHYSIQUEMENT mon tracé curvilineaire
+            // (lane projection lateral ~0 a l'intersection -- piege !) mais
+            // n'est PAS un blocker de file. Filtre par cap : headingDiff < 45°.
             constexpr float kClearScan = 70.f;
             bool        laneAheadClear = true;
             const IAgent* blocker     = nullptr;
@@ -1026,6 +1031,12 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 if (!other || other.get() == this) continue;
                 const core::Vec2 dp = other->getPosition() - position;
                 if (dp.x * dp.x + dp.y * dp.y > 110.f * 110.f) continue;
+                // FILTRE CAP : ne considerer comme blocker que les SAME-DIRECTION.
+                // Sinon, un croise/oppose dans la boite (mon lane passe DESSUS)
+                // serait pris pour un suiveur de file et empecherait MODE A.
+                const float hDiff = std::abs(core::math::wrapDeg180(
+                    other->getHeading() - currentAngle));
+                if (hDiff > 45.f) continue;
                 const LaneProjection pr =
                     currentLane->project(other->getPosition(), s, s + kClearScan);
                 if (!pr.valid) continue;
@@ -1033,7 +1044,6 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 if (std::abs(pr.lateral) >
                     visionParams.laneCorridorHalf + 6.f) continue;
                 laneAheadClear = false;
-                // On retient le PLUS PROCHE comme bloqueur principal.
                 if (!blocker ||
                     (other->getPosition() - position).length() <
                     (blocker->getPosition() - position).length()) {
