@@ -54,13 +54,16 @@ Approach::Direction directionFromHeading(float headingDeg) {
     return best;
 }
 
-// Direction "a ma droite" depuis ma direction d'arrivee.
+// Direction "a ma droite" depuis MA BRANCHE D'ORIGINE.
+// Convention ecran : x+ = EST, y+ = SUD. Un vehicule arrivant DEPUIS le NORD
+// roule vers le SUD : son cote droit pointe vers l'OUEST (rotation +90deg du
+// heading en coordonnees ecran). Idem pour les autres approches.
 Approach::Direction rightOf(Approach::Direction from) {
     switch (from) {
-        case Approach::Direction::NORTH: return Approach::Direction::EAST;
-        case Approach::Direction::SOUTH: return Approach::Direction::WEST;
-        case Approach::Direction::EAST:  return Approach::Direction::SOUTH;
-        case Approach::Direction::WEST:  return Approach::Direction::NORTH;
+        case Approach::Direction::NORTH: return Approach::Direction::WEST;
+        case Approach::Direction::SOUTH: return Approach::Direction::EAST;
+        case Approach::Direction::EAST:  return Approach::Direction::NORTH;
+        case Approach::Direction::WEST:  return Approach::Direction::SOUTH;
     }
     return Approach::Direction::NORTH;
 }

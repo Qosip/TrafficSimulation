@@ -440,11 +440,23 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 const int sid = interAhead->getId();
                 if (currentStopIntersectionId != sid) {      // nouveau stop -> reset
                     currentStopIntersectionId = sid;
-                    stopHeldTime = 0.f;
-                    stopReleased = false;
+                    stopHeldTime     = 0.f;
+                    stopReleased     = false;
+                    stopEverYielded_ = false;
                 }
 
-                if (!stopReleased) {
+                // Axe MAJEUR (route principale, pas de panneau STOP) : la policy
+                // renvoie {canEnter=true, shouldStop=false, stopLineGap=0}. Le
+                // halt protocol ne doit PAS s'enclencher : stopLineGap=0 == "a la
+                // ligne" -> sans ce garde, stopForceHalt freinait brutalement
+                // l'agent prioritaire avant son passage. On ne marque l'arret QUE
+                // si la policy a deja exige shouldStop sur cette approche.
+                if (decision.shouldStop) stopEverYielded_ = true;
+
+                if (!stopEverYielded_) {
+                    // Jamais cede ici -> je suis sur l'axe majeur, passage libre.
+                    stopReleased = true;
+                } else if (!stopReleased) {
                     // "A la ligne" = la policy ne me demande plus d'approcher
                     // (gap d'arret quasi nul). Vrai aussi bien quand la voie est
                     // libre (canEnter) que quand on cede (shouldStop, gap 0).
@@ -790,6 +802,36 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             const float margin = 6.f + 0.25f * closing;
             if (bumper >= margin) continue;                         // pas imminent
 
+            // --- FAUX LEADER cross-lane (anti-blocage en/apres intersection) ---
+            // Le check d'empreinte ci-dessus capture un perpendiculaire QUI VIT
+            // dans la boite ou la borde -- meme si son corps n'est PAS sur ma
+            // trajectoire reelle. Resultat : "je freine pour un vehicule de la
+            // voie d'a cote" -> je fige -> les autres bloquent. Garde supplementaire :
+            // hors imminent-crash (kHardMin), exiger que l'autre se projette sur
+            // MA LIGNE (lane) dans un couloir resserre. Un perpendiculaire qui
+            // traverse projette s>>s avec |lateral| grand (sa position est en
+            // dehors du tracé curviligne) -> rejete. Un vrai leader same-direction
+            // a |lateral| petit -> garde.
+            // EXCEPTION : imminent-crash (bumper tres petit) -> on ne filtre pas,
+            // securite collision absolue.
+            constexpr float kCrossLaneHardMin = 8.f;
+            if (currentLane && bumper > kCrossLaneHardMin) {
+                const float reach = std::max(forwardDist + 30.f, 60.f);
+                const LaneProjection pr =
+                    currentLane->project(other->getPosition(), s, s + reach);
+                if (!pr.valid) continue;
+                if (pr.s <= s) continue;                            // pied derriere -> pas un leader
+                // Corridor : largeur de ma voie + demi-empreinte LATERALE de l'autre
+                // dans MON repere (tient compte de son cap relatif). Tres etroit pour
+                // les meme-sens / oppose (parallele), large pour un perpendiculaire
+                // REELLEMENT en travers de ma voie. Pour un perpendiculaire sur une
+                // VOIE adjacente (pas sur ma trajectoire), pr.lateral est l'ecart
+                // CARTESIEN au tracé -- grand -> rejete.
+                const float corridorHalf =
+                    visionParams.laneCorridorHalf + otherLatExtent * 0.5f + 4.f;
+                if (std::abs(pr.lateral) > corridorHalf) continue;  // pas sur ma voie
+            }
+
             // --- Anti-DEADLOCK -----------------------------------------------
             // Trafic de MEME sens (suivi de file) -> je freine TOUJOURS : une
             // chaine de suiveurs ne se bloque jamais (sa tete est libre, seul le
@@ -909,6 +951,61 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
         currentBlockReason = BlockReason::NONE;
     }
 
+    // --- Deadlock auto-recovery (DERNIER recours) ---------------------------
+    // Filet ultime contre les cycles non resolus par le bris VIN (gel rotatif
+    // a N vehicules, P2P pathologique, faux leader cross-lane non rattrape par
+    // le filtre ci-dessus). Regle : si je suis immobile depuis > kDeadlockGrace
+    // SANS qu'aucun corps reel ne barre PHYSIQUEMENT ma voie, je force un creep.
+    // L'autre suiveur reprend, puis ainsi de suite -> cycle brise.
+    // Ignore les attentes LEGITIMES (feu rouge, STOP, peloton, depassement, panne) :
+    // un agent qui attend correctement un signal ne doit pas etre debloque.
+    {
+        constexpr float kFixedDt = 1.f / 60.f;
+        const bool legitWait =
+            currentBlockReason == BlockReason::INTERSECTION_RED  ||
+            currentBlockReason == BlockReason::INTERSECTION_STOP ||
+            currentBlockReason == BlockReason::PLATOONING        ||
+            currentBlockReason == BlockReason::OVERTAKING        ||
+            currentBlockReason == BlockReason::BREAKDOWN         ||
+            currentBlockReason == BlockReason::AT_GOAL           ||
+            currentBlockReason == BlockReason::NO_PATH;
+        if (!legitWait && currentSpeed < 5.f && pendingAccel < 1.f) {
+            deadlockStuckTime_ += kFixedDt;
+        } else {
+            deadlockStuckTime_ = 0.f;
+        }
+
+        constexpr float kDeadlockGrace = 4.0f;   // s avant declenchement
+        if (deadlockStuckTime_ > kDeadlockGrace && currentLane) {
+            // Aucun corps reel sur MA trajectoire devant moi ?
+            constexpr float kClearScan = 70.f;
+            bool laneAheadClear = true;
+            for (const auto& other : agents) {
+                if (!other || other.get() == this) continue;
+                const core::Vec2 dp = other->getPosition() - position;
+                if (dp.x * dp.x + dp.y * dp.y > 110.f * 110.f) continue;
+                const LaneProjection pr =
+                    currentLane->project(other->getPosition(), s, s + kClearScan);
+                if (!pr.valid) continue;
+                if (pr.s <= s) continue;
+                if (std::abs(pr.lateral) >
+                    visionParams.laneCorridorHalf + 6.f) continue;
+                laneAheadClear = false;
+                break;
+            }
+            if (laneAheadClear) {
+                // Creep d'urgence : sortie d'arret en ~0.5s, casse le cycle.
+                pendingAccel        = std::max(pendingAccel,
+                                               idm.params().aMax * 0.7f);
+                pendingDesiredSpeed = std::max(pendingDesiredSpeed, 40.f);
+                currentBlockReason  = BlockReason::NONE;
+                // Decremente sans reset complet : si on retombe stuck, on
+                // redeclenche assez vite (et non apres 4s pleines).
+                deadlockStuckTime_  = std::max(0.f, deadlockStuckTime_ - 1.5f);
+            }
+        }
+    }
+
     // --- Finalisation instrumentation diagnostic ---
     if (dbgLeaderPtr) {
         dbgLeaderSrc_           = dbgSrc;                  // 1 perception / 2 filet
@@ -968,9 +1065,16 @@ void Vehicle::integrate(float dt) {
     // sous la vitesse de croisiere la plus basse (>=30 px/s) : aucun vehicule
     // qui roule normalement n'est fige. Un demarrage donne pendingAccel >> 2
     // (l'IDM pousse fort depuis l'arret) -> la condition ne s'y declenche pas.
+    // EXCEPTION : on est PHYSIQUEMENT sur l'aire d'une intersection (dbgOnInter_).
+    // Coller currentSpeed a 0 dans la boite cree un wedge persistant : le
+    // vehicule freine pour un faux leader (cross-lane), retombe a 0, et bloque
+    // les flux croises. On laisse l'IDM se debrouiller -> degagement naturel.
     constexpr float kCreepSpeed = 14.f;   // px/s
     constexpr float kCreepAccel = 2.f;    // px/s^2
-    if (currentSpeed < kCreepSpeed && pendingAccel < kCreepAccel) currentSpeed = 0.f;
+    if (!dbgOnInter_ &&
+        currentSpeed < kCreepSpeed && pendingAccel < kCreepAccel) {
+        currentSpeed = 0.f;
+    }
 
     s += currentSpeed * dt;
     if (s > currentLane->getLength()) s = currentLane->getLength();
@@ -1100,7 +1204,9 @@ void Vehicle::resetToStart(const World& world) {
     currentStopIntersectionId = -1;
     stopHeldTime         = 0.f;
     stopReleased         = false;
+    stopEverYielded_     = false;
     keepClearWaited_     = 0.f;
+    deadlockStuckTime_   = 0.f;
 
     const auto fullPath = AStarPlanner::findPath(world, startTile, goalTile);
     if (!fullPath.empty()) {

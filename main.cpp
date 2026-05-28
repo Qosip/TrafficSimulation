@@ -345,7 +345,21 @@ int main() {
                             case sf::Keyboard::Num7: currentTool = BuildTool::INTERSECTION_FIXED_PRIORITY; break;
                             case sf::Keyboard::Num8: currentTool = BuildTool::INTERSECTION_P2P; break;
                             case sf::Keyboard::Num9:
-                            case sf::Keyboard::Delete: currentTool = BuildTool::ERASE; break;
+                                currentTool = BuildTool::ERASE; break;
+                            case sf::Keyboard::Delete:
+                                // En build : raccourci outil ERASE.
+                                // Hors build : supprime de la scene tous les
+                                // vehicules selectionnes (clic gauche pour selection).
+                                if (buildMode) {
+                                    currentTool = BuildTool::ERASE;
+                                } else {
+                                    agents.erase(std::remove_if(
+                                        agents.begin(), agents.end(),
+                                        [](const std::unique_ptr<IAgent>& a) {
+                                            return a && a->isSelected();
+                                        }), agents.end());
+                                }
+                                break;
                             default: break;
                         }
                     }

@@ -88,6 +88,22 @@ protected:
     // la liveness -> passe le seuil, on cede au bris de cycle par VIN.
     float keepClearWaited_          = 0.f;
 
+    // STOP : a-t-on deja, durant CETTE approche, recu un shouldStop de la policy ?
+    // Sert a distinguer l'axe MAJEUR (jamais shouldStop -> aucun halt protocol)
+    // de l'axe MINEUR (qui doit marquer l'arret). Sans ce flag, l'axe majeur
+    // declenchait par erreur stopForceHalt parce que stopLineGap defaut = 0 px
+    // < kHaltZone -> "atLine" -> halt requis. Reset par changement d'intersection.
+    bool  stopEverYielded_          = false;
+
+    // --- Deadlock auto-recovery -----------------------------------------------
+    // Cycle rotatif non resolu (A cede a B, B a C, C a A) : meme apres bris VIN,
+    // certains scenarios denses produisent un gel. Filet de DERNIER recours :
+    // si je suis immobile depuis > kDeadlockGrace ET ma voie est physiquement
+    // libre devant moi (aucun corps projete sur ma trajectoire), on force un
+    // creep d'acceleration pour casser le cycle. Non declenche pour les attentes
+    // legitimes (feu rouge, STOP a marquer) -- on identifie via BlockReason.
+    float deadlockStuckTime_        = 0.f;
+
     // Etat depassement (offset lateral transitoire vs Lane curvilineaire).
     enum class OvertakeState { NONE, OVERTAKING, RETURNING };
     OvertakeState overtakeState  = OvertakeState::NONE;

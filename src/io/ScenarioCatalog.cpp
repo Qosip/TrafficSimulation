@@ -78,6 +78,55 @@ void spawnFourWay(AgentVec& agents, World& w, const Cross& c,
 }
 
 // =============================================================================
+// SOUS-CARREFOUR : memes regles que Cross + spawnFourWay, mais avec des bornes
+// locales (xMin..xMax, yMin..yMax). Permet d'empiler plusieurs carrefours
+// INDEPENDANTS dans la meme scene (comparaisons visuelles cote a cote).
+// =============================================================================
+struct SubCross {
+    int cx, cy;              // centre du carrefour
+    int xMin, xMax;          // bornes x de la H-road locale (incluses)
+    int yMin, yMax;          // bornes y de la V-road locale (incluses)
+};
+
+void spawnFourWaySub(AgentVec& agents, World& w, const SubCross& c,
+                     const Personality& p, int D, bool stagger) {
+    const int oW = stagger ? 2 : 0;
+    const int oN = stagger ? 1 : 0;
+    const int oS = stagger ? 3 : 0;
+    addCar(agents, w, c.cx - D,      c.cy,          c.xMax - 1, c.cy,       p); // EST
+    addCar(agents, w, c.cx + D + oW, c.cy - 1,      c.xMin + 1, c.cy - 1,   p); // OUEST
+    addCar(agents, w, c.cx,          c.cy + D + oN, c.cx,        c.yMin + 1, p); // NORD
+    addCar(agents, w, c.cx - 1,      c.cy - D - oS, c.cx - 1,    c.yMax - 1, p); // SUD
+}
+
+struct DoubleCross { SubCross top, bot; };
+
+// Deux carrefours empiles VERTICALEMENT, separes par 'gap' tuiles vides : ce
+// trou casse la connexite V-road -> A* ne peut JAMAIS tisser de path qui passe
+// par les deux scenes. Chaque sous-monde est strictement isole.
+DoubleCross makeTwoCrossroads(std::unique_ptr<World>& world,
+                              RegulationType regTop, RegulationType regBot,
+                              int W = 30, int halfH = 30, int gap = 4) {
+    const int H = 2 * halfH + gap;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+    const int cx = W / 2;
+    const int cyTop = halfH / 2;
+    const int cyBot = halfH + gap + halfH / 2;
+    // HAUT : H-road row cyTop, V-road LOCALE [0..halfH-1].
+    buildHRoad(w, cyTop, 0, W - 1);
+    buildVRoad(w, cx, 0, halfH - 1);
+    buildCrossroad(w, cx, cyTop, 1, regTop);
+    // BAS  : H-road row cyBot, V-road LOCALE [halfH+gap..H-1].
+    buildHRoad(w, cyBot, 0, W - 1);
+    buildVRoad(w, cx, halfH + gap, H - 1);
+    buildCrossroad(w, cx, cyBot, 2, regBot);
+    SubCross top{cx, cyTop, 0, W - 1, 0, halfH - 1};
+    SubCross bot{cx, cyBot, 0, W - 1, halfH + gap, H - 1};
+    return {top, bot};
+}
+
+// =============================================================================
 // Constructeurs de scenarios
 // =============================================================================
 
@@ -279,6 +328,131 @@ void buildBreakdown(std::unique_ptr<World>& world, AgentVec& agents) {
         addCar(agents, *world, 55 - k * 8, 5, 1, 5, prof::normalDriver()); // sens inverse
 }
 
+// --- Comparaisons visuelles : deux (ou trois) scenes COTE A COTE -------------
+//
+// Memes spawns, memes profils : seul change le mode ou le parametrage compare.
+// On voit DIRECTEMENT les comportements en parallele -> utile en presentation.
+
+void buildComparePRvsSTOP(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    const DoubleCross dc = makeTwoCrossroads(world,
+        RegulationType::PRIORITY_RIGHT, RegulationType::STOP);
+    spawnFourWaySub(agents, *world, dc.top, prof::normalDriver(), 10, /*stagger=*/true);
+    spawnFourWaySub(agents, *world, dc.bot, prof::normalDriver(), 10, /*stagger=*/true);
+}
+
+void buildComparePRvsYIELD(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    const DoubleCross dc = makeTwoCrossroads(world,
+        RegulationType::PRIORITY_RIGHT, RegulationType::YIELD);
+    spawnFourWaySub(agents, *world, dc.top, prof::normalDriver(), 10, /*stagger=*/true);
+    spawnFourWaySub(agents, *world, dc.bot, prof::normalDriver(), 10, /*stagger=*/true);
+}
+
+void buildCompareP2PvsAIM(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    const DoubleCross dc = makeTwoCrossroads(world,
+        RegulationType::P2P, RegulationType::AIM);
+    // Arrivee SIMULTANEE (stagger=false) : impasse temporelle maximale.
+    spawnFourWaySub(agents, *world, dc.top, prof::normalDriver(), 10, /*stagger=*/false);
+    spawnFourWaySub(agents, *world, dc.bot, prof::normalDriver(), 10, /*stagger=*/false);
+}
+
+void buildCompareDensityP2PvsAIM(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    const DoubleCross dc = makeTwoCrossroads(world,
+        RegulationType::P2P, RegulationType::AIM);
+    // 3 anneaux concentriques -> 12 vehicules par carrefour.
+    const int rings[3] = {11, 8, 5};
+    for (int D : rings) {
+        spawnFourWaySub(agents, *world, dc.top, prof::normalDriver(), D, /*stagger=*/false);
+        spawnFourWaySub(agents, *world, dc.bot, prof::normalDriver(), D, /*stagger=*/false);
+    }
+}
+
+void buildCompareLightsVsPlatoon(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    const DoubleCross dc = makeTwoCrossroads(world,
+        RegulationType::TRAFFIC_LIGHT, RegulationType::VIRTUAL_PLATOON);
+    spawnFourWaySub(agents, *world, dc.top, prof::normalDriver(), 10, /*stagger=*/true);
+    spawnFourWaySub(agents, *world, dc.bot, prof::normalDriver(), 10, /*stagger=*/true);
+}
+
+void buildCompareFixedVsP2P(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    const DoubleCross dc = makeTwoCrossroads(world,
+        RegulationType::FIXED_PRIORITY, RegulationType::P2P);
+    spawnFourWaySub(agents, *world, dc.top, prof::normalDriver(), 10, /*stagger=*/true);
+    spawnFourWaySub(agents, *world, dc.bot, prof::normalDriver(), 10, /*stagger=*/true);
+}
+
+void buildCompareLightsVsRoundabout(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    constexpr int W = 30, halfH = 30, gap = 4;
+    const int H = 2 * halfH + gap;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+    const int cx = W / 2;
+    const int cyTop = halfH / 2;
+    const int cyBot = halfH + gap + halfH / 2;
+    // HAUT : carrefour a feux.
+    buildHRoad(w, cyTop, 0, W - 1);
+    buildVRoad(w, cx, 0, halfH - 1);
+    buildCrossroad(w, cx, cyTop, 1, RegulationType::TRAFFIC_LIGHT);
+    // BAS : rond-point cote 4 centre approximativement sur (cx, cyBot).
+    buildHRoad(w, cyBot, 0, W - 1);
+    buildVRoad(w, cx, halfH + gap, H - 1);
+    buildRoundabout(w, cx - 2, cyBot - 2, 2, 4);
+    w.refreshRoundaboutApproaches();
+    SubCross top{cx, cyTop, 0, W - 1, 0, halfH - 1};
+    SubCross bot{cx, cyBot, 0, W - 1, halfH + gap, H - 1};
+    spawnFourWaySub(agents, w, top, prof::normalDriver(), 10, /*stagger=*/true);
+    spawnFourWaySub(agents, w, bot, prof::normalDriver(), 10, /*stagger=*/true);
+}
+
+void buildCompareProfiles(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    constexpr int W = 60, H = 18;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+    // 3 H-roads independantes (chaque buildHRoad cree row y RIGHT + row y-1 LEFT).
+    const int rows[3] = {4, 9, 14};
+    for (int y : rows) buildHRoad(w, y, 0, W - 1);
+
+    Personality slowTruck = prof::truckDriver();
+    slowTruck.speedComplianceFactor = 0.5f;
+    const Personality profilesArr[3] = {
+        prof::aggressiveDriver(), prof::normalDriver(), prof::calmDriver()
+    };
+    // HAUT = agressif | MILIEU = normal | BAS = calme : camion lent + 4 suiveurs.
+    for (int i = 0; i < 3; ++i) {
+        const int y = rows[i];
+        addTruck(agents, w, 20, y, W - 2, y, slowTruck);
+        for (int k = 0; k < 4; ++k)
+            addCar(agents, w, 16 - k * 4, y, W - 2, y, profilesArr[i]);
+    }
+}
+
+void buildCompareOvertake(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    constexpr int W = 60, H = 14;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+    const int yTop = 4, yBot = 9;
+    buildHRoad(w, yTop, 0, W - 1);
+    buildHRoad(w, yBot, 0, W - 1);
+
+    Personality slowTruck = prof::truckDriver();
+    slowTruck.speedComplianceFactor = 0.5f;
+    // HAUT : agressifs (depassent). BAS : calmes (restent derriere).
+    addTruck(agents, w, 20, yTop, W - 2, yTop, slowTruck);
+    addCar  (agents, w, 12, yTop, W - 2, yTop, prof::aggressiveDriver());
+    addCar  (agents, w,  6, yTop, W - 2, yTop, prof::aggressiveDriver());
+    addTruck(agents, w, 20, yBot, W - 2, yBot, slowTruck);
+    addCar  (agents, w, 12, yBot, W - 2, yBot, prof::calmDriver());
+    addCar  (agents, w,  6, yBot, W - 2, yBot, prof::calmDriver());
+}
+
 // --- Massif : ville XXXXL ----------------------------------------------------
 
 void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
@@ -457,6 +631,49 @@ std::vector<ScenarioDef> makeCatalog() {
     add("Panne au milieu de la voie", "Cas limites",
         "Un camion tombe en panne : la file s'arrete et attend la reparation.",
         buildBreakdown);
+
+    // --- Comparaisons visuelles : deux scenes empilees ---
+    add("Compare carrefour : Priorite a droite vs STOP", "Comparaisons visuelles",
+        "Deux carrefours identiques empiles. EN HAUT : priorite a droite. EN BAS : "
+        "STOP. Memes vehicules, memes arrivees decalees. Differences de debit et de "
+        "fluidite visibles d'un coup d'oeil.",
+        buildComparePRvsSTOP);
+    add("Compare carrefour : Priorite a droite vs Cedez (YIELD)", "Comparaisons visuelles",
+        "Priorite a droite (HAUT) vs cedez le passage (BAS). Le YIELD ne s'arrete "
+        "que si necessaire ; ailleurs il passe sans toucher au frein.",
+        buildComparePRvsYIELD);
+    add("Compare carrefour : P2P (VANET) vs AIM (reservation)", "Comparaisons visuelles",
+        "Arrivee SIMULTANEE des 4 vehicules sur chaque carrefour. HAUT : negociation "
+        "pair-a-pair decentralisee. BAS : reservation centralisee. Comparaison "
+        "directe des deux approches recherche.",
+        buildCompareP2PvsAIM);
+    add("Compare densite : P2P vs AIM (12 vehicules / carrefour)", "Comparaisons visuelles",
+        "Forte densite : 12 vehicules par carrefour (3 anneaux concentriques x 4 "
+        "branches). P2P degrade en four-way stop / AIM ordonnance les creneaux : "
+        "l'ecart de debit est tres marque.",
+        buildCompareDensityP2PvsAIM);
+    add("Compare carrefour : Feux vs Peloton virtuel", "Comparaisons visuelles",
+        "Memes flux des deux cotes. Feux tricolores (HAUT) imposent des arrets ; "
+        "le peloton virtuel (BAS) entrelace les passages sans s'arreter.",
+        buildCompareLightsVsPlatoon);
+    add("Compare carrefour : Priorite fixe vs P2P", "Comparaisons visuelles",
+        "Strategie 'un axe garde la main' (HAUT) vs negociation P2P egalitaire (BAS). "
+        "Le bras prioritaire ne s'arrete jamais ; le P2P decide cas par cas.",
+        buildCompareFixedVsP2P);
+    add("Compare carrefour : Feux vs Rond-point", "Comparaisons visuelles",
+        "Feux tricolores (HAUT) vs rond-point cote 4 (BAS). Meme flux : on voit la "
+        "phase d'arret aux feux face a la continuite du rond-point.",
+        buildCompareLightsVsRoundabout);
+    add("Compare profils : agressif / normal / calme", "Comparaisons visuelles",
+        "Trois voies paralleles, meme camion lent en tete + 4 suiveurs. "
+        "HAUT : conducteurs agressifs (gap court, depassements). MILIEU : normaux. "
+        "BAS : calmes (gap large, pas de depassement). Differences d'IDM et de "
+        "willingness en un coup d'oeil.",
+        buildCompareProfiles);
+    add("Compare depassement : agressif vs calme", "Comparaisons visuelles",
+        "Meme camion lent + 2 suiveurs sur chaque voie. HAUT : agressifs qui "
+        "doublent. BAS : calmes qui restent derriere. Demontre overtakeWillingness.",
+        buildCompareOvertake);
 
     // --- Massif ---
     add("Ville mixte (demo comportements)", "Massif",
