@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "core/agent/IAgent.hpp"
+#include "core/intersection/ConflictGeometry.hpp"
 #include "core/intersection/Intersection.hpp"
 #include "core/math/Constants.hpp"
 #include "core/math/Vec2.hpp"
@@ -59,6 +60,10 @@ Decision OrcaPolicy::request(const PolicyContext& ctx, const Intersection& inter
     const float myArrive  = std::max(0.f, distToCenter - interHalf) / myEff;   // s avant la boite
     const int   myVin     = ctx.selfAgent ? ctx.selfAgent->getVehicleId() : -1;
     const float myHeading = ctx.self.heading;
+    const Approach::Direction myFrom = conflict::directionFromHeading(myHeading);
+    const core::agent::TurnIntent myIntent =
+        ctx.selfAgent ? ctx.selfAgent->getTurnIntent()
+                      : core::agent::TurnIntent::UNKNOWN;
 
     bool  mustYield      = false;   // au moins un conflit me domine
     bool  hardStop       = false;   // conflit imminent -> arret FERME
@@ -69,7 +74,11 @@ Decision OrcaPolicy::request(const PolicyContext& ctx, const Intersection& inter
         if (other.get() == ctx.selfAgent) continue;          // self-skip obligatoire
 
         const float oHeading = other->getHeading();
-        if (!axesConflict(myHeading, oHeading)) continue;    // pas un conflit croise
+        const Approach::Direction oFrom = conflict::directionFromHeading(oHeading);
+        if (!conflict::movementsConflict(myFrom, myIntent,
+                                         oFrom, other->getTurnIntent())) {
+            continue;                                        // trajectoires compatibles
+        }
 
         const Vec2  oPos   = other->getPosition();
         const float oDist  = (oPos - center).length();

@@ -49,6 +49,7 @@ Intersection::Intersection(const Intersection& o)
       coveredTiles(o.coveredTiles), approaches(o.approaches),
       lightTimer(o.lightTimer), currentPhase(o.currentPhase),
       greenDuration(o.greenDuration), orangeDuration(o.orangeDuration),
+      clock_(o.clock_),
       stopMajorHorizontal_(o.stopMajorHorizontal_),
       policy_(makePolicyFor(o.type)),
       reqMutex_(std::make_unique<std::mutex>())   // mutex propre (non copiable)
@@ -64,6 +65,7 @@ Intersection& Intersection::operator=(const Intersection& o) {
     currentPhase   = o.currentPhase;
     greenDuration  = o.greenDuration;
     orangeDuration = o.orangeDuration;
+    clock_         = o.clock_;
     stopMajorHorizontal_ = o.stopMajorHorizontal_;
     policy_        = makePolicyFor(o.type);
     if (!reqMutex_) reqMutex_ = std::make_unique<std::mutex>();
@@ -73,7 +75,17 @@ Intersection& Intersection::operator=(const Intersection& o) {
 Intersection::~Intersection() = default;
 
 void Intersection::addCoveredTile(core::TileCoord tile) { coveredTiles.push_back(tile); }
-void Intersection::addApproach(const Approach& approach) { approaches.push_back(approach); }
+void Intersection::addApproach(const Approach& approach) {
+    Approach a = approach;
+    if (type == RegulationType::TRAFFIC_LIGHT) {
+        const bool isNS = (a.direction == Approach::Direction::NORTH ||
+                           a.direction == Approach::Direction::SOUTH);
+        if      (currentPhase == 0) a.hasGreen = isNS;
+        else if (currentPhase == 2) a.hasGreen = !isNS;
+        else                        a.hasGreen = false;
+    }
+    approaches.push_back(a);
+}
 void Intersection::clearApproaches() { approaches.clear(); }
 
 void Intersection::update(float dt) {
@@ -83,10 +95,13 @@ void Intersection::update(float dt) {
 
 void Intersection::updateTrafficLight(float dt) {
     lightTimer += dt;
-    const float phaseDuration = (currentPhase == 0 || currentPhase == 2) ? greenDuration : orangeDuration;
 
-    if (lightTimer >= phaseDuration) {
-        lightTimer = 0.f;
+    auto phaseDuration = [&]() {
+        return (currentPhase == 0 || currentPhase == 2) ? greenDuration : orangeDuration;
+    };
+
+    while (lightTimer >= phaseDuration()) {
+        lightTimer -= phaseDuration();
         currentPhase = (currentPhase + 1) % 4;
 
         for (auto& app : approaches) {
@@ -134,6 +149,11 @@ void Intersection::setRegulation(RegulationType newType) {
     // Repart sur une phase de feu propre (sans effet pour les autres modes).
     lightTimer   = 0.f;
     currentPhase = 0;
+    for (auto& app : approaches) {
+        const bool isNS = (app.direction == Approach::Direction::NORTH ||
+                           app.direction == Approach::Direction::SOUTH);
+        app.hasGreen = (type == RegulationType::TRAFFIC_LIGHT) && isNS;
+    }
 }
 
 bool Intersection::coversTile(int gridX, int gridY) const {

@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "core/agent/IAgent.hpp"
+#include "core/intersection/ConflictGeometry.hpp"
 #include "core/intersection/Intersection.hpp"
 #include "core/math/Vec2.hpp"
 
@@ -21,10 +22,6 @@ Vec2 computeCenter(const Intersection& inter, float tileSize) {
         c.y += t.y * tileSize + tileSize / 2.f;
     }
     return c / static_cast<float>(tiles.size());
-}
-
-bool fromIsHorizontal(Approach::Direction from) {
-    return from == Approach::Direction::EAST || from == Approach::Direction::WEST;
 }
 
 } // namespace
@@ -46,7 +43,10 @@ Decision AimPolicy::request(const PolicyContext& ctx, const Intersection& inter)
     const float stopLineGap  = std::max(0.f, distToCenter - interHalf - bufferToLine);
 
     // Fenetre de reservation demandee, en temps ABSOLU.
-    const bool  myHoriz   = fromIsHorizontal(ctx.self.from);
+    const Approach::Direction myFrom = ctx.self.from;
+    const core::agent::TurnIntent myIntent =
+        ctx.selfAgent ? ctx.selfAgent->getTurnIntent()
+                      : core::agent::TurnIntent::UNKNOWN;
     const float eff       = std::max(ctx.self.speed, 30.f);
     const float tEnterRel = stopLineGap / eff;
     const float tCross    = std::max(params_.minCrossingTime,
@@ -63,19 +63,22 @@ Decision AimPolicy::request(const PolicyContext& ctx, const Intersection& inter)
         if (it != reservations_.end()) {
             it->second.tEnterAbs   = tEnterAbs;
             it->second.tExitAbs    = tExitAbs;
-            it->second.horizontal  = myHoriz;
+            it->second.from        = myFrom;
+            it->second.intent      = myIntent;
             it->second.lastSeenAbs = now;
             d.canEnter = true;
             return d;
         }
     }
 
-    // Conflit = trajectoire PERPENDICULAIRE dont la fenetre chevauche la mienne.
+    // Conflit = trajectoire geometriquement incompatible dont la fenetre
+    // chevauche la mienne. Les trajectoires paralleles compatibles coexistent.
     bool conflict = false;
     for (const auto& kv : reservations_) {
         if (kv.first == myVin) continue;
         const Slot& s = kv.second;
-        if (s.horizontal == myHoriz) continue;          // parallele -> coexiste
+        if (!conflict::movementsConflict(myFrom, myIntent, s.from, s.intent))
+            continue;
         const float overlapStart = std::max(tEnterAbs, s.tEnterAbs);
         const float overlapEnd   = std::min(tExitAbs,  s.tExitAbs);
         if (overlapEnd > overlapStart) { conflict = true; break; }
@@ -83,7 +86,8 @@ Decision AimPolicy::request(const PolicyContext& ctx, const Intersection& inter)
 
     if (!conflict) {
         // FCFS : le premier demandeur d'un creneau libre le reserve.
-        if (myVin >= 0) reservations_[myVin] = Slot{ tEnterAbs, tExitAbs, myHoriz, now };
+        if (myVin >= 0)
+            reservations_[myVin] = Slot{ tEnterAbs, tExitAbs, myFrom, myIntent, now };
         d.canEnter   = true;
         d.shouldStop = false;
     } else {

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/agent/IAgent.hpp"
+#include "core/intersection/ConflictGeometry.hpp"
 #include "core/intersection/Intersection.hpp"
 #include "core/math/Constants.hpp"
 #include "core/math/Vec2.hpp"
@@ -78,6 +79,9 @@ Decision PlatooningPolicy::request(const PolicyContext& ctx, const Intersection&
     const int   myVin    = ctx.selfAgent ? ctx.selfAgent->getVehicleId() : -1;
 
     const Approach::Direction myFrom = ctx.self.from;
+    const core::agent::TurnIntent myIntent =
+        ctx.selfAgent ? ctx.selfAgent->getTurnIntent()
+                      : core::agent::TurnIntent::UNKNOWN;
 
     // Cherche mon predecesseur immediat sur l'axe virtuel : le vehicule croise
     // qui arrive JUSTE AVANT moi (plus grand tEnter encore inferieur au mien).
@@ -90,8 +94,12 @@ Decision PlatooningPolicy::request(const PolicyContext& ctx, const Intersection&
         if (!other) continue;
         if (other.get() == ctx.selfAgent) continue;
 
-        const Approach::Direction oFrom = directionFromHeading(other->getHeading());
-        if (!axesConflict(myFrom, oFrom)) continue;          // seules les voies croisees
+        const Approach::Direction oFrom =
+            conflict::directionFromHeading(other->getHeading());
+        if (!conflict::movementsConflict(myFrom, myIntent,
+                                         oFrom, other->getTurnIntent())) {
+            continue;                                       // trajectoires compatibles
+        }
 
         const Vec2  oPos{ other->getPosition().x, other->getPosition().y };
         const float oDist = (oPos - center).length();

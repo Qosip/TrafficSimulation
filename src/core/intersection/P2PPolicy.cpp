@@ -8,6 +8,7 @@
 
 #include "core/agent/IAgent.hpp"
 #include "core/agent/TurnIntent.hpp"
+#include "core/intersection/ConflictGeometry.hpp"
 #include "core/intersection/Intersection.hpp"
 #include "core/math/Constants.hpp"
 #include "core/math/Vec2.hpp"
@@ -130,8 +131,15 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
         if (!other) continue;
         if (other.get() == ctx.selfAgent) continue;          // self-skip obligatoire
 
-        const Approach::Direction oFrom = directionFromHeading(other->getHeading());
-        if (!axesConflict(myFrom, oFrom)) continue;          // pas un conflit croise
+        const Approach::Direction oFrom =
+            conflict::directionFromHeading(other->getHeading());
+        const core::agent::TurnIntent oIntent = other->getTurnIntent();
+        if (!conflict::movementsConflict(myFrom, ctx.selfAgent
+                                                  ? ctx.selfAgent->getTurnIntent()
+                                                  : core::agent::TurnIntent::UNKNOWN,
+                                         oFrom, oIntent)) {
+            continue;                                       // trajectoires compatibles
+        }
 
         const Vec2  oPos{ other->getPosition().x, other->getPosition().y };
         const float oDist = (oPos - center).length();
@@ -177,7 +185,7 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
 
         // --- Hierarchie de dominance VanMiddlesworth ---
         const bool oStopped = oSpeed <= params_.stoppedEps;
-        const bool oTurning = core::agent::isTurning(other->getTurnIntent());
+        const bool oTurning = core::agent::isTurning(oIntent);
         const int  oVin     = other->getVehicleId();
         if (oStopped && oVin >= 0) minStoppedVin = std::min(minStoppedVin, oVin);
 
@@ -197,8 +205,8 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
             otherDominates = false; decided = true;  // le roulant garde la main
         } else {
             // Regle 2 : les deux arretes -> priorite a droite.
-            if (oFrom == rightOf(myFrom))      { otherDominates = true;  decided = true; viaRightHand = true; }
-            else if (myFrom == rightOf(oFrom)) { otherDominates = false; decided = true; }
+            if (oFrom == conflict::rightOf(myFrom))      { otherDominates = true;  decided = true; viaRightHand = true; }
+            else if (myFrom == conflict::rightOf(oFrom)) { otherDominates = false; decided = true; }
         }
 
         if (!decided && (myTurning != oTurning)) {
