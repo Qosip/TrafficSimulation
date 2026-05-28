@@ -83,11 +83,8 @@ bool axesConflict(Approach::Direction a, Approach::Direction b) {
 
 P2PState P2PPolicy::stateFor(const PolicyContext& ctx, const Intersection& inter) const {
     // Deja physiquement dans l'intersection ? -> TRAVERSAL.
-    for (const auto& t : inter.getCoveredTiles()) {
-        const Vec2 tc{ t.x * ctx.tileSize + ctx.tileSize / 2.f,
-                       t.y * ctx.tileSize + ctx.tileSize / 2.f };
-        if ((ctx.self.position - tc).length() < ctx.tileSize * 0.75f) return P2PState::TRAVERSAL;
-    }
+    if (inter.containsWorldPoint(ctx.self.position, ctx.tileSize))
+        return P2PState::TRAVERSAL;
     const Vec2  center = computeCenter(inter, ctx.tileSize);
     const float dist   = (center - ctx.self.position).length();
     return (dist > params_.claimDistance) ? P2PState::LURKING : P2PState::CLAIMING;
@@ -140,12 +137,7 @@ Decision P2PPolicy::request(const PolicyContext& ctx, const Intersection& inter)
         const float oSpeed = other->getSpeed();
 
         // Vehicule deja DANS l'intersection -> il a la priorite de fait.
-        bool insideInter = false;
-        for (const auto& t : inter.getCoveredTiles()) {
-            const Vec2 tc{ t.x * ctx.tileSize + ctx.tileSize / 2.f,
-                           t.y * ctx.tileSize + ctx.tileSize / 2.f };
-            if ((oPos - tc).length() < params_.gap.insideRadius) { insideInter = true; break; }
-        }
+        const bool insideInter = inter.containsWorldPoint(oPos, ctx.tileSize);
         if (insideInter) { yieldHard = true; worstTArrive = 0.f; break; }
 
         // Loin et arrete -> pas une menace.

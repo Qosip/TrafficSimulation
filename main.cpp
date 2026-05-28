@@ -87,10 +87,23 @@ std::string saveJsonDialog() {
 int main() {
     unsigned int winW = 1024;
     unsigned int winH = 800;
-    const float PANEL_WIDTH = 280.f;
+    constexpr float PANEL_MIN_WIDTH = 260.f;
+    constexpr float PANEL_MAX_WIDTH = 560.f;
+    constexpr float PANEL_RESIZER_WIDTH = 8.f;
+    float panelWidth = 320.f;
+    bool  resizingPanel = false;
     const int GRID_W = 32;
     const int GRID_H = 32;
     const float TILE_SIZE = 50.f;
+
+    auto clampPanelWidth = [&]() {
+        const float maxByWindow = std::max(PANEL_MIN_WIDTH, (float)winW - 220.f);
+        panelWidth = std::clamp(panelWidth, PANEL_MIN_WIDTH,
+                                std::min(PANEL_MAX_WIDTH, maxByWindow));
+    };
+    auto simAreaWidth = [&]() {
+        return std::max(0.f, (float)winW - panelWidth);
+    };
 
     sf::RenderWindow window(sf::VideoMode(winW, winH), "Simulateur MAS - Panel Pro", sf::Style::Default);
     window.setFramerateLimit(60);
@@ -226,10 +239,11 @@ int main() {
     // Tail commun a tous les points de lancement.
     auto enterSimulationFromCurrentWorld = [&]() {
         if (!world) return;
+        clampPanelWidth();
         camera = std::make_unique<Camera>(world->getWorldPixelWidth() / 2.f,
                                           world->getWorldPixelHeight() / 2.f,
-                                          (float)winW - PANEL_WIDTH, (float)winH);
-        camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
+                                          simAreaWidth(), (float)winH);
+        camera->updateViewport((float)winW, (float)winH, panelWidth);
         renderer.invalidateMapCache();
         metrics.reset();
         simFinished     = false;
@@ -319,12 +333,29 @@ int main() {
             if (event.type == sf::Event::Resized) {
                 winW = event.size.width;
                 winH = event.size.height;
+                clampPanelWidth();
                 window.setView(sf::View(sf::FloatRect(0.f, 0.f, (float)winW, (float)winH)));
-                if (camera) camera->updateViewport((float)winW, (float)winH, PANEL_WIDTH);
+                if (camera) camera->updateViewport((float)winW, (float)winH, panelWidth);
             }
 
             if (currentState == AppState::SIMULATION) {
-                if (sf::Mouse::getPosition(window).x < (int)(winW - PANEL_WIDTH)) {
+                const float panelLeft = simAreaWidth();
+                if (event.type == sf::Event::MouseButtonPressed &&
+                    event.mouseButton.button == sf::Mouse::Left &&
+                    std::abs((float)event.mouseButton.x - panelLeft) <= PANEL_RESIZER_WIDTH) {
+                    resizingPanel = true;
+                }
+                if (event.type == sf::Event::MouseMoved && resizingPanel) {
+                    panelWidth = (float)winW - (float)event.mouseMove.x;
+                    clampPanelWidth();
+                    if (camera) camera->updateViewport((float)winW, (float)winH, panelWidth);
+                }
+                if (event.type == sf::Event::MouseButtonReleased &&
+                    event.mouseButton.button == sf::Mouse::Left) {
+                    resizingPanel = false;
+                }
+
+                if (!resizingPanel && sf::Mouse::getPosition(window).x < (int)simAreaWidth()) {
                     if (camera) camera->handleEvent(event, window);
                 }
 
@@ -365,7 +396,8 @@ int main() {
                     }
                 }
 
-                const bool inSimArea = sf::Mouse::getPosition(window).x < (int)(winW - PANEL_WIDTH);
+                const bool inSimArea =
+                    !resizingPanel && sf::Mouse::getPosition(window).x < (int)simAreaWidth();
 
                 if (event.type == sf::Event::MouseButtonPressed && inSimArea && camera) {
                     sf::Vector2f wPos = camera->screenToWorld(window, sf::Mouse::getPosition(window));
@@ -790,7 +822,7 @@ int main() {
             hoverValid = false;
             if (buildMode && world && camera) {
                 const sf::Vector2i mp = sf::Mouse::getPosition(window);
-                if (mp.x < (int)(winW - PANEL_WIDTH)) {
+                if (mp.x < (int)simAreaWidth()) {
                     const sf::Vector2f wp = camera->screenToWorld(window, mp);
                     hoverX = (int)(wp.x / TILE_SIZE);
                     hoverY = (int)(wp.y / TILE_SIZE);
@@ -829,8 +861,34 @@ int main() {
 
             window.setView(sf::View(sf::FloatRect(0.f, 0.f, (float)winW, (float)winH)));
 
-            ImGui::SetNextWindowPos(ImVec2(winW - PANEL_WIDTH, 0.f));
-            ImGui::SetNextWindowSize(ImVec2(PANEL_WIDTH, (float)winH));
+            const float panelLeft = simAreaWidth();
+            ImGui::SetNextWindowPos(ImVec2(panelLeft - PANEL_RESIZER_WIDTH * 0.5f, 0.f));
+            ImGui::SetNextWindowSize(ImVec2(PANEL_RESIZER_WIDTH, (float)winH));
+            ImGui::Begin("##DashboardResizeHandle", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+            ImGui::InvisibleButton("##resize", ImVec2(PANEL_RESIZER_WIDTH, (float)winH));
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            }
+            if (ImGui::IsItemActive()) {
+                panelWidth = (float)winW - ImGui::GetIO().MousePos.x;
+                clampPanelWidth();
+                if (camera) camera->updateViewport((float)winW, (float)winH, panelWidth);
+            }
+            const ImU32 handleColor = ImGui::GetColorU32(
+                (ImGui::IsItemHovered() || ImGui::IsItemActive())
+                    ? ImVec4(0.45f, 0.68f, 1.f, 0.9f)
+                    : ImVec4(1.f, 1.f, 1.f, 0.22f));
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(panelLeft - 1.f, 0.f),
+                ImVec2(panelLeft + 1.f, (float)winH),
+                handleColor);
+            ImGui::End();
+
+            ImGui::SetNextWindowPos(ImVec2((float)winW - panelWidth, 0.f));
+            ImGui::SetNextWindowSize(ImVec2(panelWidth, (float)winH));
             ImGui::Begin("Dashboard de Controle", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
 
             if (ImGui::CollapsingHeader("Fichiers & Options", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1082,12 +1140,23 @@ int main() {
                                 color = ImVec4(1.f, 0.3f, 0.3f, 1.f); break;
                             case core::agent::BlockReason::INTERSECTION_YIELD:
                                 color = ImVec4(1.f, 0.8f, 0.f, 1.f); break;
+                            case core::agent::BlockReason::INTERSECTION_STOP:
+                                color = ImVec4(1.f, 0.65f, 0.15f, 1.f); break;
+                            case core::agent::BlockReason::NEGOTIATING:
+                            case core::agent::BlockReason::PLATOONING:
+                                color = ImVec4(0.4f, 0.85f, 1.f, 1.f); break;
                             case core::agent::BlockReason::LEADER_VEHICLE:
                                 color = ImVec4(1.f, 0.5f, 0.f, 1.f); break;
                             case core::agent::BlockReason::CORNERING:
                                 color = ImVec4(0.6f, 0.8f, 1.f, 1.f); break;
                             case core::agent::BlockReason::INITIALIZING:
                                 color = ImVec4(0.8f, 0.8f, 0.8f, 1.f); break;
+                            case core::agent::BlockReason::BREAKDOWN:
+                                color = ImVec4(1.f, 0.2f, 0.2f, 1.f); break;
+                            case core::agent::BlockReason::OVERTAKING:
+                                color = ImVec4(0.8f, 0.5f, 1.f, 1.f); break;
+                            case core::agent::BlockReason::KEEP_CLEAR:
+                                color = ImVec4(1.f, 0.75f, 0.25f, 1.f); break;
                         }
                         ImGui::TextColored(color, "Statut : %s", core::agent::toString(reason));
 

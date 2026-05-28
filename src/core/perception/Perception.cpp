@@ -22,6 +22,7 @@ PerceptionResult Perception::scan(
     PerceptionResult result;
 
     const float myHalfLength = myself->getLength() / 2.f;
+    const float tileSize = world.getTileSize();
 
     // --- 1. Scan des agents ---
     for (const auto& agent : agents) {
@@ -59,7 +60,31 @@ PerceptionResult Perception::scan(
                 myLane->project(otherPos, myS, myS + params.range);
             if (!proj.valid) continue;
             if (std::abs(proj.lateral) > params.laneCorridorHalf) continue;
-            const float along = proj.s - myS;          // distance le long du tracé
+
+            const core::Vec2 foot = myLane->getPositionAt(proj.s);
+            const Intersection* footInter =
+                world.getIntersectionAt(foot.x, foot.y);
+            const Intersection* otherInter =
+                world.getIntersectionAt(otherPos.x, otherPos.y);
+            if (footInter != otherInter && (footInter || otherInter)) continue;
+            if (!footInter && !otherInter) {
+                const int fgx = static_cast<int>(foot.x / tileSize);
+                const int fgy = static_cast<int>(foot.y / tileSize);
+                const int ogx = static_cast<int>(otherPos.x / tileSize);
+                const int ogy = static_cast<int>(otherPos.y / tileSize);
+                const Tile& fTile = world.getTile(fgx, fgy);
+                const Tile& oTile = world.getTile(ogx, ogy);
+                if (fTile.roadType == RoadType::NONE ||
+                    oTile.roadType == RoadType::NONE) {
+                    continue;
+                }
+                if (fTile.direction != TileDirection::NONE &&
+                    oTile.direction != TileDirection::NONE &&
+                    fTile.direction != oTile.direction) {
+                    continue;
+                }
+            }
+            const float along = proj.s - myS;          // distance le long du trace
             if (along <= 0.f) continue;                // derriere moi sur la voie
 
             // Garde-fou same-direction COMPARE AU CAP DE LA VOIE au point de
@@ -122,7 +147,6 @@ PerceptionResult Perception::scan(
     const float headRad = myHeadingDeg * core::math::DEG2RAD;
     const core::Vec2 lookDir{ std::cos(headRad), std::sin(headRad) };
 
-    const float tileSize = world.getTileSize();
     for (float d = 0.f; d < params.intersectionLookAhead; d += tileSize * 0.5f) {
         const core::Vec2 checkPos = myPosition + lookDir * d;
         const int gridX = static_cast<int>(checkPos.x / tileSize);

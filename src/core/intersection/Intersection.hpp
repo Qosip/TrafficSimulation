@@ -89,6 +89,7 @@ public:
     const std::vector<core::TileCoord>& getCoveredTiles() const;
     const std::vector<Approach>&        getApproaches() const;
     bool                                coversTile(int gridX, int gridY) const;
+    bool                                containsWorldPoint(core::Vec2 p, float tileSize) const;
     LightState                          getLightState(Approach::Direction dir) const;
 
     // --- Geometrie (source unique : renderer / policies / lane partagent) ---

@@ -128,7 +128,10 @@ Decision StopPolicy::request(const PolicyContext& ctx,
         if (dO > safeTime * 350.f + dangerDist) continue;
 
         // (a) vehicule principal engage / tout proche de la boite.
-        if (dO < dangerDist) { conflict = true; break; }
+        if (inter.containsWorldPoint(oPos, ctx.tileSize) || dO < dangerDist) {
+            conflict = true;
+            break;
+        }
 
         // (b) vehicule principal en approche : arrive-t-il avant la fin de mon
         //     degagement ? (sa vitesse propre est prise en compte).

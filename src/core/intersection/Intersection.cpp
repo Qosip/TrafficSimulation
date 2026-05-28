@@ -2,6 +2,7 @@
 #include "core/intersection/Intersection.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "core/intersection/AimPolicy.hpp"
 #include "core/intersection/FixedPriorityPolicy.hpp"
@@ -141,6 +142,13 @@ bool Intersection::coversTile(int gridX, int gridY) const {
         if (tile.x == gridX && tile.y == gridY) return true;
     }
     return false;
+}
+
+bool Intersection::containsWorldPoint(core::Vec2 p, float ts) const {
+    if (ts <= 0.f) return false;
+    const int gridX = static_cast<int>(std::floor(p.x / ts));
+    const int gridY = static_cast<int>(std::floor(p.y / ts));
+    return coversTile(gridX, gridY);
 }
 
 int                                  Intersection::getId()           const { return id; }

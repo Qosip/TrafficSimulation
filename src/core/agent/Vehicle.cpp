@@ -100,6 +100,12 @@ void Vehicle::rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
         const float s = core::cross(b - a, db) / denom;
         return a + da * s;
     };
+    auto isDrivablePoint = [&](core::Vec2 p) {
+        if (!world) return true;
+        const int gx = static_cast<int>(p.x / tileSize);
+        const int gy = static_cast<int>(p.y / tileSize);
+        return world->getTile(gx, gy).roadType != RoadType::NONE;
+    };
 
     // Rond-point : arc circulaire, sens LEGAL francais (angle atan2 DECROISSANT).
     // Au lieu de rejoindre l'anneau au point RADIAL (virage a 90° pile -> le
@@ -195,15 +201,6 @@ void Vehicle::rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
                     const core::Vec2 entryPoint = p2 - dir1 * cornerRadius;
                     const core::Vec2 exitPoint  = p2 + dir2 * cornerRadius;
 
-                    const core::Vec2 toEntry = entryPoint - localDensePath.back();
-                    const float distToEntry = toEntry.length();
-                    if (distToEntry > 4.f) {
-                        const core::Vec2 dirToEntry = toEntry / distToEntry;
-                        for (float dE = 4.f; dE < distToEntry; dE += 4.f) {
-                            localDensePath.push_back(localDensePath.back() + dirToEntry * 4.f);
-                        }
-                    }
-
                     core::Vec2 circleCenter = entryPoint + core::Vec2{-dir1.y, dir1.x} * cornerRadius;
                     const core::Vec2 testRadius = exitPoint - circleCenter;
                     if (std::abs(testRadius.length() - cornerRadius) > 1.f) {
@@ -219,16 +216,37 @@ void Vehicle::rebuildLaneFromPath(const std::vector<core::TileCoord>& tilePath,
                     while (angleDiff >  core::math::PI) angleDiff -= core::math::TWO_PI;
 
                     constexpr int numSegments = 15;
-                    for (int k = 1; k <= numSegments; ++k) {
+                    bool curveStaysDrivable =
+                        isDrivablePoint(entryPoint) && isDrivablePoint(exitPoint);
+                    for (int k = 1; curveStaysDrivable && k <= numSegments; ++k) {
                         const float t = static_cast<float>(k) / numSegments;
                         const float a = startAngle + angleDiff * t;
-                        localDensePath.push_back({
+                        curveStaysDrivable = isDrivablePoint({
                             circleCenter.x + std::cos(a) * cornerRadius,
                             circleCenter.y + std::sin(a) * cornerRadius
                         });
                     }
-                    i += 2;
-                    continue;
+                    if (curveStaysDrivable) {
+                        const core::Vec2 toEntry = entryPoint - localDensePath.back();
+                        const float distToEntry = toEntry.length();
+                        if (distToEntry > 4.f) {
+                            const core::Vec2 dirToEntry = toEntry / distToEntry;
+                            for (float dE = 4.f; dE < distToEntry; dE += 4.f) {
+                                localDensePath.push_back(localDensePath.back() + dirToEntry * 4.f);
+                            }
+                        }
+
+                        for (int k = 1; k <= numSegments; ++k) {
+                            const float t = static_cast<float>(k) / numSegments;
+                            const float a = startAngle + angleDiff * t;
+                            localDensePath.push_back({
+                                circleCenter.x + std::cos(a) * cornerRadius,
+                                circleCenter.y + std::sin(a) * cornerRadius
+                            });
+                        }
+                        i += 2;
+                        continue;
+                    }
                 }
             }
         }
@@ -571,11 +589,12 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             // reaction) rattrape le vehicule encore >35 px/s mais qui
                             // FREINE vers l'arret DANS la boite : sans lui, il etait
                             // juge "fluide" -> j'entrais -> il s'arretait -> je me
-                            // figeais au milieu.
+                            // figeais au milieu. Exception : si l'autre est deja
+                            // DANS la boite sur ma trajectoire, il bloque l'entree
+                            // meme en roulant ; sinon je peux m'engager dans son flanc.
                             constexpr float kReactHorizon = 0.6f;   // s
                             const float predSpeed =
                                 other->getSpeed() + other->getCurrentAccel() * kReactHorizon;
-                            if (other->getSpeed() > 35.f && predSpeed > 35.f) continue;
                             const core::Vec2 od = other->getPosition() - winAnchor;
                             if (od.x * od.x + od.y * od.y > winReach * winReach) continue;
                             const LaneProjection pr =
@@ -595,6 +614,8 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             const bool otherInBox = inBoxPortion &&
                                 (world.getIntersectionAt(other->getPosition().x,
                                                           other->getPosition().y) == interAhead);
+                            if (!otherInBox && other->getSpeed() > 35.f && predSpeed > 35.f)
+                                continue;
                             float laterMax;
                             if (otherInBox) {
                                 const float dHabs = std::abs(core::math::wrapDeg180(
@@ -906,7 +927,9 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     }
 
     // --- Loi de poursuite longitudinale : CACC (peloton connecte) ou IDM ------
-    if (personality_.cooperative && leaderIsVehicle &&
+    const bool caccLeaderIsPerceived =
+        dbgSrc == 1 && dbgLeaderPtr == lastPerception.directObstacleAgent;
+    if (personality_.cooperative && leaderIsVehicle && caccLeaderIsPerceived &&
         lastPerception.hasDirectObstacle && lastPerception.directObstacleAgent) {
         // PELOTON COOPERATIF (CACC) : distance CONSTANTE + feed-forward de
         // l'acceleration du predecesseur (communiquee). Consequences voulues :
@@ -994,11 +1017,19 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     // -- un agent qui attend correctement un signal ne doit pas etre force.
     {
         constexpr float kFixedDt = 1.f / 60.f;
-        // Liste DRASTIQUEMENT reduite : seules les vraies attentes immuables
-        // (panne, but, no_path) et le rouge restent. Les ex-"legitimes"
-        // (STOP, PLATOONING, OVERTAKING) etaient des trous : un blocage
-        // pathologique deguise en l'un d'eux ne se debloquait jamais.
+        // Ne jamais forcer un vehicule qui attend legalement AVANT la boite
+        // (STOP, priorite, negotiation, keep-clear...). La liveness de ces cas
+        // doit venir des policies et du filtrage des faux leaders, pas d'un
+        // passage force qui mettrait un vehicule la ou il n'a pas le droit.
+        const bool legalWaitBeforeBox =
+            !dbgOnInter_ &&
+            (currentBlockReason == BlockReason::INTERSECTION_STOP  ||
+             currentBlockReason == BlockReason::INTERSECTION_YIELD ||
+             currentBlockReason == BlockReason::NEGOTIATING        ||
+             currentBlockReason == BlockReason::PLATOONING         ||
+             currentBlockReason == BlockReason::KEEP_CLEAR);
         const bool legitWait =
+            legalWaitBeforeBox ||
             currentBlockReason == BlockReason::INTERSECTION_RED  ||
             currentBlockReason == BlockReason::BREAKDOWN         ||
             currentBlockReason == BlockReason::AT_GOAL           ||
@@ -1584,6 +1615,22 @@ void Vehicle::updateOvertakeDecision(
         overtakeTarget = 0.f;
     }
 
+    // Abort avant la ligne : un vehicule decale lateralement ne doit jamais
+    // aborder un carrefour ou un rond-point depuis la voie opposee.
+    if (overtakeState != OvertakeState::NONE && currentLane) {
+        const float scanAhead = std::max(tileSize, currentSpeed * 1.2f + bodySize.x * 2.f);
+        for (float ds = 0.f; ds <= scanAhead; ds += tileSize * 0.25f) {
+            const float sp = std::min(s + ds, currentLane->getLength());
+            const core::Vec2 p = currentLane->getPositionAt(sp);
+            if (world.getIntersectionAt(p.x, p.y)) {
+                overtakeState  = OvertakeState::RETURNING;
+                overtakeTarget = 0.f;
+                break;
+            }
+            if (sp >= currentLane->getLength()) break;
+        }
+    }
+
     // Si on a depasse le leader, on se rabat.
     if (overtakeState == OvertakeState::OVERTAKING && overtakeLeader) {
         const core::Vec2 leadDiff = overtakeLeader->getPosition() - position;
@@ -1615,8 +1662,10 @@ void Vehicle::updateOvertakeMotion(float dt) {
         overtakeLeader  = nullptr;
     }
 
-    // Lissage : ~40 px/s lateral.
-    const float maxRate = 40.f * dt;
+    // Lissage : ~40 px/s lateral. En intersection, retour accelere pour ne pas
+    // conserver un offset de depassement dans la zone de conflit.
+    const float lateralRate = dbgOnInter_ ? 160.f : 40.f;
+    const float maxRate = lateralRate * dt;
     const float delta   = overtakeTarget - lateralOffset;
     if (std::abs(delta) <= maxRate) {
         lateralOffset = overtakeTarget;

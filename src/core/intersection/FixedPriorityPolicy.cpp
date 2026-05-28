@@ -83,12 +83,7 @@ Decision FixedPriorityPolicy::request(const PolicyContext& ctx,
         if (distToInter > params_.scanRadius) continue;
 
         // Vehicule deja DANS l'intersection -> blocage immediat.
-        bool insideInter = false;
-        for (const auto& t : inter.getCoveredTiles()) {
-            const Vec2 tc{ t.x * ctx.tileSize + ctx.tileSize / 2.f,
-                           t.y * ctx.tileSize + ctx.tileSize / 2.f };
-            if ((oPos - tc).length() < params_.insideRadius) { insideInter = true; break; }
-        }
+        const bool insideInter = inter.containsWorldPoint(oPos, ctx.tileSize);
         if (insideInter) { conflictFound = true; worstTArrive = 0.f; break; }
 
         const float oSpeed = other->getSpeed();

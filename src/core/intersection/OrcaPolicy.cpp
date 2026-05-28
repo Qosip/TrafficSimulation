@@ -77,12 +77,7 @@ Decision OrcaPolicy::request(const PolicyContext& ctx, const Intersection& inter
         const float oSpeed = other->getSpeed();
 
         // Deja DANS la boite -> il occupe l'espace : on doit l'eviter franchement.
-        bool insideInter = false;
-        for (const auto& t : inter.getCoveredTiles()) {
-            const Vec2 tc{ t.x * ctx.tileSize + ctx.tileSize / 2.f,
-                           t.y * ctx.tileSize + ctx.tileSize / 2.f };
-            if ((oPos - tc).length() < params_.gap.insideRadius) { insideInter = true; break; }
-        }
+        const bool insideInter = inter.containsWorldPoint(oPos, ctx.tileSize);
         if (insideInter) {
             mustYield = true;
             hardStop  = true;

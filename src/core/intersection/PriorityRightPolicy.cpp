@@ -84,6 +84,10 @@ Decision PriorityRightPolicy::request(const PolicyContext& ctx,
     bool  anyInside     = false;
     float worstTArrive  = std::numeric_limits<float>::infinity();
     bool  conflictFound = false;
+    bool  movingOrInsideConflict = false;
+    int   minStoppedConflictVin = std::numeric_limits<int>::max();
+    const bool myStopped = ctx.self.speed <= 8.f;
+    const int  myVin = ctx.selfAgent ? ctx.selfAgent->getVehicleId() : -1;
 
     for (const auto& other : *ctx.others) {
         if (!other) continue;
@@ -98,19 +102,12 @@ Decision PriorityRightPolicy::request(const PolicyContext& ctx,
         if (std::abs(hDiff) > params_.headingTolerance) continue;
 
         // Agent deja INTRA-intersection ?
-        bool insideInter = false;
-        for (const auto& t : inter.getCoveredTiles()) {
-            const Vec2 tCenter{ t.x * ctx.tileSize + ctx.tileSize / 2.f,
-                                t.y * ctx.tileSize + ctx.tileSize / 2.f };
-            if ((oPos - tCenter).length() < params_.insideRadius) {
-                insideInter = true;
-                break;
-            }
-        }
+        const bool insideInter = inter.containsWorldPoint(oPos, ctx.tileSize);
         if (insideInter) {
             anyInside = true;
             worstTArrive = 0.f; // bloque immediat
             conflictFound = true;
+            movingOrInsideConflict = true;
             break;
         }
 
@@ -144,10 +141,27 @@ Decision PriorityRightPolicy::request(const PolicyContext& ctx,
         if (overlapEnd > overlapStart) {
             conflictFound = true;
             worstTArrive = std::min(worstTArrive, tEnterOther);
+            if (myStopped && oSpeed <= 8.f && other->getVehicleId() >= 0) {
+                minStoppedConflictVin =
+                    std::min(minStoppedConflictVin, other->getVehicleId());
+            } else {
+                movingOrInsideConflict = true;
+            }
         }
     }
 
-    if (anyInside || conflictFound) {
+    bool mustYield = anyInside || conflictFound;
+    // Liveness : arrivees simultanees a la priorite-a-droite. Si tout le monde
+    // est deja arrete a sa ligne, la regle pure cree un cycle. Le plus petit VIN
+    // du cluster stationnaire passe ; les autres gardent la priorite a droite.
+    if (mustYield && !movingOrInsideConflict &&
+        minStoppedConflictVin != std::numeric_limits<int>::max() &&
+        myStopped && myVin >= 0 &&
+        myVin < minStoppedConflictVin) {
+        mustYield = false;
+    }
+
+    if (mustYield) {
         d.canEnter    = false;
         d.shouldStop  = true;
         d.stopLineGap = stopLineGap;

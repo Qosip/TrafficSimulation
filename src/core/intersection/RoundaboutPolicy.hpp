@@ -1,11 +1,8 @@
 // src/core/intersection/RoundaboutPolicy.hpp
 //
-// Policy "Rond-point" : priorite TOTALE aux vehicules deja a l'interieur
-// (regle francaise standard depuis 1984). L'agent entrant cede a tout
-// vehicule dont la position se trouve dans le disque central.
-//
-// Pas de gestion fine de la direction de rotation : on considere tous les
-// vehicules a l'interieur comme prioritaires.
+// Policy "Rond-point" : priorite aux vehicules deja engages sur l'anneau,
+// mais uniquement s'ils arrivent reellement sur mon point d'entree. Un vehicule
+// loin sur une autre portion de l'anneau ne doit pas bloquer mon insertion.
 #pragma once
 
 #include "core/intersection/IIntersectionPolicy.hpp"
@@ -17,6 +14,8 @@ struct RoundaboutParams {
     float insideDetectRadius = 70.f;  // px : rayon "interieur" du rond-point
     float safetyMargin       = 0.8f;  // s  : marge sur le temps d'arrivee
     float minCrossingTime    = 1.5f;  // s  : temps mini pour traverser
+    float yieldTime          = 1.8f;  // s  : temps max avant qu'un prioritaire arrive a mon entree
+    float minYieldAngle      = 0.35f; // rad: garde proche meme a vitesse faible
 };
 
 class RoundaboutPolicy : public IIntersectionPolicy {
