@@ -541,6 +541,85 @@ void buildCityXXXXL(std::unique_ptr<World>& world, AgentVec& agents) {
     }
 }
 
+// Variante de la ville XXXXL : VOITURES UNIQUEMENT, ~700 vehicules. Reseau
+// IDENTIQUE a buildCityXXXXL (memes axes, memes ronds-points, memes regulations,
+// meme seed RNG) -> scenes superposables pour A/B mental. Differences :
+//   * aucun camion (pas de carrosserie longue qui bouchonne en virage),
+//   * profils repartis 40 agressif / 30 normal / 30 calme (densite + dynamique),
+//   * budget de spawn plus haut (700 vs 500).
+// Stress-test de la logique d'intersection densifie : plus de paires en conflit
+// simultane -> revele wedges/cycles que les fixes anti-deadlock doivent absorber.
+void buildCityXXXXLCarsOnly(std::unique_ptr<World>& world, AgentVec& agents) {
+    agents.clear();
+    constexpr int W = 92, H = 72;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+
+    const int rows[7] = {5, 14, 22, 33, 45, 55, 65};
+    const int cols[8] = {6, 15, 25, 38, 50, 60, 72, 84};
+    const int nR = 7, nC = 8;
+    for (int i = 0; i < nR; ++i) buildHRoad(w, rows[i], 0, W - 1);
+    for (int j = 0; j < nC; ++j) buildVRoad(w, cols[j], 0, H - 1);
+
+    struct RB { int ci, ri, side; };
+    const RB rbs[6] = {
+        {1, 1, 6}, {4, 0, 4}, {2, 3, 8},
+        {5, 4, 6}, {6, 2, 4}, {3, 5, 6}
+    };
+    auto roundaboutSide = [&](int ci, int ri) -> int {
+        for (const auto& rb : rbs) if (rb.ci == ci && rb.ri == ri) return rb.side;
+        return 0;
+    };
+
+    const RegulationType cyc[6] = {
+        RegulationType::PRIORITY_RIGHT, RegulationType::TRAFFIC_LIGHT,
+        RegulationType::STOP,           RegulationType::FIXED_PRIORITY,
+        RegulationType::P2P,            RegulationType::AIM
+    };
+    int id = 1, k = 0;
+    for (int ri = 0; ri < nR; ++ri)
+        for (int ci = 0; ci < nC; ++ci) {
+            const int C = cols[ci], R = rows[ri];
+            const int side = roundaboutSide(ci, ri);
+            if (side > 0) buildRoundabout(w, C - side / 2, R - side / 2, id++, side);
+            else          buildCrossroad(w, C, R, id++, cyc[k++ % 6]);
+        }
+    w.refreshRoundaboutApproaches();
+
+    std::vector<core::TileCoord> roadTiles;
+    for (int x = 0; x < W; ++x)
+        for (int y = 0; y < H; ++y) {
+            const RoadType rt = w.getTile(x, y).roadType;
+            if (rt != RoadType::NONE && rt != RoadType::INTERSECTION)
+                roadTiles.push_back({x, y});
+        }
+
+    // Seed DIFFERENT de buildCityXXXXL : evite de tomber sur les memes 500
+    // trajets puis d'en ajouter 200 -- on veut un melange neuf pour cette variante.
+    core::Rng rng(0xCA75CA75ULL);
+    std::unordered_set<long long> usedStart;
+    auto key = [W](core::TileCoord t) { return (long long)t.y * W + t.x; };
+
+    constexpr int kTargetVehicles = 700;
+    int spawned = 0, guard = 0;
+    while (spawned < kTargetVehicles && guard < kTargetVehicles * 12) {
+        ++guard;
+        const auto a = roadTiles[rng.uniformInt(0, (int)roadTiles.size() - 1)];
+        const auto b = roadTiles[rng.uniformInt(0, (int)roadTiles.size() - 1)];
+        if (usedStart.count(key(a))) continue;
+        auto path = AStarPlanner::findPath(w, a, b);
+        if ((int)path.size() < 10) continue;
+
+        usedStart.insert(key(a));
+        const int dice = rng.uniformInt(0, 99);
+        const Personality p = (dice < 40) ? prof::aggressiveDriver()
+                            : (dice < 70) ? prof::calmDriver()
+                                          : prof::normalDriver();
+        addCar(agents, w, a.x, a.y, b.x, b.y, p);
+        ++spawned;
+    }
+}
+
 // =============================================================================
 // Catalogue (ordre = ordre d'affichage)
 // =============================================================================
@@ -688,6 +767,12 @@ std::vector<ScenarioDef> makeCatalog() {
         "Le chargement (trajets A*) peut prendre quelques secondes ; dezoomez a la "
         "molette pour embrasser toute la ville.",
         buildCityXXXXL);
+    add("Ville XXXXL VOITURES uniquement (~700 vehicules)", "Massif",
+        "Meme reseau XXXXL (92x72, 6 ronds-points, tous modes de carrefour) mais "
+        "AUCUN camion : 700 voitures, profils repartis 40/30/30 (agressif/normal/"
+        "calme). Stress-test des fixes anti-wedge en haute densite -- aucun "
+        "blocage mutuel ne doit subsister plus de ~1 sec.",
+        buildCityXXXXLCarsOnly);
 
     return cat;
 }
