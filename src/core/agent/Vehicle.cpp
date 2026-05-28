@@ -562,20 +562,22 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             const LaneProjection pr =
                                 currentLane->project(other->getPosition(), blockFrom, sExit + need);
                             if (!pr.valid) continue;
-                            // Couloir HEADING-AWARE pour la portion DANS la boite :
-                            // un corps PERPENDICULAIRE a moi (cap a 90 deg) s'etend de
-                            // sa LONGUEUR sur l'axe lateral du mien -> il barre ma voie
-                            // meme si son CENTRE est decentre (geometrie 2x2 : centre a
-                            // 25 px de ma voie, mais corps long de ~50 px deborde).
-                            // PARALLELE (~ meme sens ou oppose) : empreinte laterale =
-                            // sa LARGEUR -> couloir reste etroit, je ne cede pas a la
-                            // voie d'en face. Le couloir 22 px brut ratait les
-                            // perpendiculaires dans la boite -> wedge mutuel.
-                            // Apres la boite [sExit..sExit+need], couloir strict 22 px :
-                            // on filtre uniquement la file de MEME sens dans l'aval.
+                            // Couloir HEADING-AWARE pour la portion DANS la boite, mais
+                            // SEULEMENT si l'autre est PHYSIQUEMENT dans cette boite.
+                            // Un perpendiculaire arrete a SA ligne (hors boite, a 50 px
+                            // de ma voie) ne doit PAS declencher le couloir elargi sinon
+                            // les prioritaires en ligne droite (STOP majeur, feu vert
+                            // tout-droit...) se figent en DEGAGE alors que la boite est
+                            // libre. Un PERPENDICULAIRE DANS la boite s'etend de sa
+                            // LONGUEUR lateralement chez moi -> couloir elargi pour le
+                            // capter. APRES la boite ou hors boite : couloir etroit
+                            // strict (22 px), ne filtre que la file de MEME sens.
                             const bool inBoxPortion = (pr.s <= sExit);
+                            const bool otherInBox = inBoxPortion &&
+                                (world.getIntersectionAt(other->getPosition().x,
+                                                          other->getPosition().y) == interAhead);
                             float laterMax;
-                            if (inBoxPortion) {
+                            if (otherInBox) {
                                 const float dHabs = std::abs(core::math::wrapDeg180(
                                     other->getHeading() - currentAngle));
                                 const float thRad = dHabs * core::math::DEG2RAD;
@@ -610,14 +612,44 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 }
             }
 
-            // Note : pas de "gate VIN d'admission" en plus de keep-clear. Une telle
-            // garde sur-cedait aux files perpendiculaires queue-ees a gauche/droite,
-            // creant ses propres deadlocks. Le KEEP-CLEAR au couloir asymetrique
-            // (large dans la boite) capte deja correctement un corps perpendiculaire
-            // qui occupe physiquement ma trajectoire ; les policies (priorite, feux,
-            // STOP, P2P...) tranchent le droit de passage en amont. Les rares paires
-            // simultanees residuelles sont brisees par le filet anti-collision (VIN).
-            const bool mayEnter = canPass && !exitBlocked;
+            // --- Tiebreak NARROW pour entrees simultanees CROISEES (anti two-turner
+            //     deadlock). Si deux trajectoires de virage se croisent dans la boite
+            //     et que les deux entrent au meme pas -> wedge mutuel. On serialise :
+            //     je cede a un perpendiculaire de plus PETIT VIN EN MOUVEMENT vers la
+            //     boite, TRES proche du bord. Conditions strictes pour eviter le
+            //     sur-yield aux files queue-ees a gauche/droite :
+            //       - speed >= 12 px/s  : exclut les arretes (files, lignes de stop)
+            //       - distOC <= 1.2 tile : juste au bord, pas en milieu d'approche
+            //       - heading vers le centre boite (dot > 0.3)
+            //       - cap perpendiculaire au mien (45 < dH < 135)
+            //     Auto-correcteur : si le contender petit-VIN s'arrete (cale), il
+            //     cesse d'etre un contender mouvant -> je ne lui cede plus.
+            bool yieldToCrossingMover = false;
+            {
+                const int        myVin  = getVehicleId();
+                const core::Vec2 interC = interAhead->getWorldCenter(tileSize);
+                for (const auto& other : agents) {
+                    if (!other || other.get() == this) continue;
+                    const int ov = other->getVehicleId();
+                    if (ov < 0 || ov >= myVin)    continue;
+                    if (other->getSpeed() < 12.f) continue;
+                    const float dH = std::abs(core::math::wrapDeg180(
+                        other->getHeading() - currentAngle));
+                    if (dH < 45.f || dH > 135.f) continue;
+                    const core::Vec2 op = other->getPosition();
+                    const core::Vec2 dC = interC - op;
+                    const float distOC = dC.length();
+                    if (distOC > tileSize * 1.2f) continue;
+                    const float oRad = other->getHeading() * core::math::DEG2RAD;
+                    const core::Vec2 oDir{ std::cos(oRad), std::sin(oRad) };
+                    if (distOC > 1.f &&
+                        (oDir.x * dC.x + oDir.y * dC.y) / distOC < 0.3f) continue;
+                    yieldToCrossingMover = true;
+                    break;
+                }
+            }
+
+            const bool mayEnter = canPass && !exitBlocked && !yieldToCrossingMover;
             const bool proceed  = mayEnter || (cannotStop && !isStopAhead);
 
             if (proceed) {
@@ -668,6 +700,19 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     leader          = box;
                     leaderIsVehicle = false;
                     leaderFromBox   = true;
+                }
+            } else if (yieldToCrossingMover) {
+                // Tiebreak : un perpendiculaire au plus PETIT VIN va entrer en meme
+                // temps que moi -> je cede a la ligne (serialise les deux turners).
+                core::behavior::LeaderInfo cx;
+                cx.present    = true;
+                cx.gap        = std::max(distToInter - getLength() / 2.f - 4.f, 0.f);
+                cx.speed      = 0.f;
+                cx.stopTarget = true;
+                if (!leader.present || cx.gap < leader.gap) {
+                    leader          = cx;
+                    leaderIsVehicle = false;
+                    leaderFromYield = true;   // diag : cede (tiebreak VIN)
                 }
             }
 
