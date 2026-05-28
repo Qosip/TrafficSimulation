@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/agent/IAgent.hpp"
+#include "core/agent/TurnIntent.hpp"
 #include "core/intersection/Intersection.hpp"
 #include "core/math/Constants.hpp"
 #include "core/math/Vec2.hpp"
@@ -43,10 +44,59 @@ Decision FixedPriorityPolicy::request(const PolicyContext& ctx,
 {
     Decision d;
 
-    // L'axe principal ne cede jamais : passage inconditionnel.
     const bool majorHorizontal = inter.isStopMajorAxisHorizontal();
     const bool selfOnMajorAxis = (fromIsHorizontal(ctx.self.from) == majorHorizontal);
+
+    const Vec2  center       = computeCenter(inter, ctx.tileSize);
+    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
+    const float distToCenter = (center - ctx.self.position).length();
+    const float bufferToLine = 25.f + ctx.self.length / 2.f;
+    const float stopLineGap  = std::max(0.f, distToCenter - interHalf - bufferToLine);
+
+    // Axe principal : prioritaire, sauf tourne-a-gauche non protege face a un
+    // prioritaire venant d'en face tout droit/a droite.
     if (selfOnMajorAxis) {
+        const bool turningLeft =
+            ctx.selfAgent &&
+            ctx.selfAgent->getTurnIntent() == core::agent::TurnIntent::LEFT;
+        if (turningLeft && ctx.others) {
+            const float myEff   = std::max(ctx.self.speed, 30.f);
+            const float myEnter = stopLineGap / myEff;
+            for (const auto& other : *ctx.others) {
+                if (!other || other.get() == ctx.selfAgent) continue;
+                if (headingIsHorizontal(other->getHeading()) != majorHorizontal) continue;
+                if (other->getTurnIntent() == core::agent::TurnIntent::LEFT) continue;
+
+                const float dH =
+                    std::abs(math::wrapDeg180(other->getHeading() - ctx.self.heading));
+                if (dH < 135.f) continue;
+
+                const Vec2  oPos{ other->getPosition().x, other->getPosition().y };
+                const float oDist = (oPos - center).length();
+                if (oDist > params_.scanRadius) continue;
+
+                const float oRad = other->getHeading() * math::DEG2RAD;
+                const Vec2  oDir{ std::cos(oRad), std::sin(oRad) };
+                Vec2 toInter = center - oPos;
+                const float lenToInter = toInter.length();
+                if (lenToInter > 1.f) {
+                    toInter /= lenToInter;
+                    if (dot(oDir, toInter) <= 0.2f) continue;
+                }
+
+                const float oEffSpeed      = std::max(other->getSpeed(), 1.f);
+                const float distToBoundary = std::max(0.f, oDist - interHalf);
+                const float tEnterOther    = distToBoundary / oEffSpeed;
+                if (tEnterOther <= myEnter + params_.minCrossingTime + params_.safetyMargin) {
+                    d.canEnter    = false;
+                    d.shouldStop  = true;
+                    d.stopLineGap = stopLineGap;
+                    d.yieldUntilT = tEnterOther;
+                    return d;
+                }
+            }
+        }
+
         d.canEnter   = true;
         d.shouldStop = false;
         return d;
@@ -54,12 +104,6 @@ Decision FixedPriorityPolicy::request(const PolicyContext& ctx,
 
     // Axe secondaire : sans observation possible, on tente (degrade prudent).
     if (!ctx.others) { d.canEnter = true; return d; }
-
-    const Vec2  center       = computeCenter(inter, ctx.tileSize);
-    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
-    const float distToCenter = (center - ctx.self.position).length();
-    const float bufferToLine = 25.f + ctx.self.length / 2.f;
-    const float stopLineGap  = std::max(0.f, distToCenter - interHalf - bufferToLine);
 
     // Fenetre temporelle pendant laquelle MA carrosserie occupera le conflit.
     const float effSpeed = std::max(ctx.self.speed, 30.f);

@@ -539,7 +539,11 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     dtype == RegulationType::FIXED_PRIORITY ||
                     dtype == RegulationType::PRIORITY_RIGHT ||
                     dtype == RegulationType::YIELD          ||
-                    dtype == RegulationType::ROUNDABOUT;
+                    dtype == RegulationType::ROUNDABOUT     ||
+                    dtype == RegulationType::P2P            ||
+                    dtype == RegulationType::AIM            ||
+                    dtype == RegulationType::VIRTUAL_PLATOON||
+                    dtype == RegulationType::ORCA;
                 if (keepClearApplies) {
                     const float laneLen = currentLane->getLength();
                     float sExit = -1.f;

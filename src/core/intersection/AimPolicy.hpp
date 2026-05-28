@@ -22,6 +22,7 @@
 
 #include <unordered_map>
 
+#include "core/agent/TurnIntent.hpp"
 #include "core/intersection/IIntersectionPolicy.hpp"
 #include "core/intersection/PriorityRightPolicy.hpp"   // GapAcceptanceParams
 
@@ -37,7 +38,8 @@ private:
     struct Slot {
         float tEnterAbs   = 0.f;
         float tExitAbs    = 0.f;
-        bool  horizontal  = false;   // axe de la trajectoire reservee
+        Approach::Direction from = Approach::Direction::NORTH;
+        core::agent::TurnIntent intent = core::agent::TurnIntent::UNKNOWN;
         float lastSeenAbs = 0.f;     // pour purger les reservations orphelines
     };
 
