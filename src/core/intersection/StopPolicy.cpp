@@ -17,6 +17,7 @@
 #include <cmath>
 
 #include "core/agent/IAgent.hpp"
+#include "core/agent/TurnIntent.hpp"
 #include "core/intersection/Intersection.hpp"
 #include "core/math/Constants.hpp"
 #include "core/math/Vec2.hpp"
@@ -55,21 +56,65 @@ Decision StopPolicy::request(const PolicyContext& ctx,
 {
     Decision d;
 
-    // --- Axe principal : aucun arret, priorite totale. -------------------
     const bool selfHorizontal = isHorizontalApproach(ctx.self.from);
     const bool selfOnMajor     = (selfHorizontal == inter.isStopMajorAxisHorizontal());
+    const Vec2  center       = computeCenter(inter, ctx.tileSize);
+    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
+    const float distToCenter = (center - ctx.self.position).length();
+    const float buffer       = 12.f + ctx.self.length / 2.f;
+    const float stopLineGap  = std::max(0.f, distToCenter - interHalf - buffer);
+
+    // --- Axe principal : prioritaire, sauf tourne-a-gauche non protege face
+    //     a l'oncoming prioritaire tout droit/a droite. --------------------
     if (selfOnMajor) {
+        const bool turningLeft =
+            ctx.selfAgent &&
+            ctx.selfAgent->getTurnIntent() == core::agent::TurnIntent::LEFT;
+        if (turningLeft && ctx.others) {
+            const float myEff   = std::max(ctx.self.speed, 30.f);
+            const float myEnter = stopLineGap / myEff;
+            for (const auto& other : *ctx.others) {
+                if (!other || other.get() == ctx.selfAgent) continue;
+                if (isHorizontalHeading(other->getHeading()) != inter.isStopMajorAxisHorizontal())
+                    continue;
+                if (other->getTurnIntent() == core::agent::TurnIntent::LEFT) continue;
+
+                const float dH = std::abs(core::math::wrapDeg180(
+                    other->getHeading() - ctx.self.heading));
+                if (dH < 135.f) continue;
+
+                const Vec2  oPos{ other->getPosition().x, other->getPosition().y };
+                const float dO = (oPos - center).length();
+                if (dO > params_.gap.scanRadius) continue;
+
+                const float hr = other->getHeading() * core::math::DEG2RAD;
+                const Vec2  vel{ std::cos(hr), std::sin(hr) };
+                Vec2 toCenter = center - oPos;
+                const float len = toCenter.length();
+                if (len > 1.f) {
+                    toCenter /= len;
+                    if (core::dot(vel, toCenter) <= 0.2f) continue;
+                }
+
+                const float oSpeed = std::max(other->getSpeed(), 1.f);
+                const float tEnter = std::max(0.f, dO - interHalf) / oSpeed;
+                if (tEnter <= myEnter + params_.gap.minCrossingTime +
+                              params_.gap.safetyMargin) {
+                    d.canEnter    = false;
+                    d.shouldStop  = true;
+                    d.stopLineGap = stopLineGap;
+                    d.yieldUntilT = tEnter;
+                    return d;
+                }
+            }
+        }
+
         d.canEnter   = true;
         d.shouldStop = false;
         return d;
     }
 
     // --- Axe secondaire : panneau STOP. ----------------------------------
-    const Vec2  center       = computeCenter(inter, ctx.tileSize);
-    const float interHalf    = inter.getOuterRadius(ctx.tileSize); // demi-cote reel (== tileSize si 2x2)
-    const float distToCenter = (center - ctx.self.position).length();
-    const float buffer       = 12.f + ctx.self.length / 2.f;
-    const float stopLineGap  = std::max(0.f, distToCenter - interHalf - buffer);
 
     // Phase 1 : approche -> freine jusqu'a la ligne.
     //

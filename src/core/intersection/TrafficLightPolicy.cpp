@@ -65,12 +65,11 @@ Decision TrafficLightPolicy::request(const PolicyContext& ctx,
                     std::abs(math::wrapDeg180(other->getHeading() - ctx.self.heading));
                 if (dH < 135.f) continue;
 
-                // Seul l'oncoming TOUT-DROIT barre mon arc de tourne-a-gauche.
-                // (Un oncoming qui tourne lui aussi degage l'axe.) UNKNOWN =
-                // prudence -> traite comme tout-droit.
+                // L'oncoming TOUT-DROIT ou a DROITE barre mon tourne-a-gauche
+                // (a droite : sortie partagee). Deux gauches opposees se degagent.
+                // UNKNOWN = prudence -> traite comme conflictuel.
                 const core::agent::TurnIntent oi = other->getTurnIntent();
-                if (oi == core::agent::TurnIntent::LEFT ||
-                    oi == core::agent::TurnIntent::RIGHT) continue;
+                if (oi == core::agent::TurnIntent::LEFT) continue;
 
                 const Vec2  oPos{ other->getPosition().x, other->getPosition().y };
                 const float oDist = (oPos - center).length();
