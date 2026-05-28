@@ -278,6 +278,12 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     const IAgent* dbgLeaderPtr = nullptr;   // leader-vehicule final (frame courante)
     int           dbgSrc       = 0;         // 1 perception, 2 filet
 
+    // Dilemme cannotStop : je m'engage parce que je ne peux plus m'arreter
+    // avant la ligne. Pour minimiser le DEPASSEMENT (sinon l'IDM, sans leader,
+    // ACCELERE vers v0 alors que je rentre), on freine quand meme au max sur ce
+    // pas. Une fois dans la boite (interOn), l'override est leve -> je degage.
+    bool dilemmaBrakeOverride = false;
+
     if (!currentLane) {
         pendingAccel        = 0.f;
         pendingDesiredSpeed = 0.f;
@@ -617,6 +623,14 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             if (proceed) {
                 // On passe. Aucun leader virtuel d'intersection : une fois
                 // PHYSIQUEMENT sur l'aire (interOn), le degagement est garanti.
+                // EXCEPTION : si proceed n'est du QU'AU dilemme cannotStop (la
+                // policy disait shouldStop mais je ne peux plus m'arreter), on
+                // force un freinage d'urgence sur ce pas. Ralentir au max avant
+                // d'entrer minimise le depassement de ligne. Sans cet override,
+                // l'IDM (sans leader) accelerait vers v0 -> overshoot maximal.
+                if (!mayEnter && cannotStop && decision.shouldStop) {
+                    dilemmaBrakeOverride = true;
+                }
             } else if (stopForceHalt) {
                 // Arret ferme PILE a la ligne d'un STOP (gap 0, point FIXE).
                 leader            = core::behavior::LeaderInfo{};
@@ -815,6 +829,14 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
     // franc mais souple. L'anti-fluage (kCreepSpeed) absorbe le dernier px/s.
     if (stopForceHalt && !stopReleased) {
         pendingAccel = -idm.params().bComf * 0.75f;
+    }
+
+    // Dilemme cannotStop : freinage d'urgence simultane a l'engagement. Reduit
+    // drastiquement le depassement de ligne par rapport au "proceed sans frein"
+    // (qui laissait l'IDM accelerer vers v0). Une fois interOn (boite), cette
+    // branche ne fire plus -> je degage normalement (pas de blocage en boite).
+    if (dilemmaBrakeOverride) {
+        pendingAccel = std::min(pendingAccel, -idm.params().bComf * 2.f);
     }
 
     // --- Diagnostic du motif de blocage ---
