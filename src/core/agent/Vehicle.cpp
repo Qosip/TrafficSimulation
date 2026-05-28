@@ -556,7 +556,31 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             const LaneProjection pr =
                                 currentLane->project(other->getPosition(), blockFrom, sExit + need);
                             if (!pr.valid) continue;
-                            if (std::abs(pr.lateral) > visionParams.laneCorridorHalf) continue;
+                            // Couloir HEADING-AWARE pour la portion DANS la boite :
+                            // un corps PERPENDICULAIRE a moi (cap a 90 deg) s'etend de
+                            // sa LONGUEUR sur l'axe lateral du mien -> il barre ma voie
+                            // meme si son CENTRE est decentre (geometrie 2x2 : centre a
+                            // 25 px de ma voie, mais corps long de ~50 px deborde).
+                            // PARALLELE (~ meme sens ou oppose) : empreinte laterale =
+                            // sa LARGEUR -> couloir reste etroit, je ne cede pas a la
+                            // voie d'en face. Le couloir 22 px brut ratait les
+                            // perpendiculaires dans la boite -> wedge mutuel.
+                            // Apres la boite [sExit..sExit+need], couloir strict 22 px :
+                            // on filtre uniquement la file de MEME sens dans l'aval.
+                            const bool inBoxPortion = (pr.s <= sExit);
+                            float laterMax;
+                            if (inBoxPortion) {
+                                const float dHabs = std::abs(core::math::wrapDeg180(
+                                    other->getHeading() - currentAngle));
+                                const float thRad = dHabs * core::math::DEG2RAD;
+                                const float oLatExtent =
+                                    (other->getLength() * 0.5f) * std::abs(std::sin(thRad)) +
+                                    (other->getBodySize().y * 0.5f) * std::abs(std::cos(thRad));
+                                laterMax = visionParams.laneCorridorHalf + oLatExtent + 8.f;
+                            } else {
+                                laterMax = visionParams.laneCorridorHalf;
+                            }
+                            if (std::abs(pr.lateral) > laterMax) continue;
                             if (pr.s >= blockFrom && pr.s <= sExit + need) { blocked = true; break; }
                         }
                         constexpr float kFixedDt = 1.f / 60.f;
@@ -580,53 +604,14 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                 }
             }
 
-            // --- Anti-conflit de boite : serialise les mouvements CROISES ------
-            // Donnees a l'appui (leaderSrc=filet, leaderClass=CROSS, onInter=1) :
-            // deux vehicules PERPENDICULAIRES qui s'engagent au MEME pas se coincent
-            // mutuellement dans la boite -> standoff que RIEN ne resout localement
-            // (avancer = collision). Les policies ne l'empechent pas toujours
-            // (canEnter vrai des deux cotes). On PREVIENT, policy-agnostique : je
-            // n'entre pas tant qu'un mouvement CROISE (cap a 45..135 du mien) occupe
-            // PHYSIQUEMENT cette boite. A granularite frame, le 2e arrivant voit le
-            // 1er DEDANS et cede -> un seul flux croise dans la boite a la fois ; elle
-            // se vide par l'avancee du 1er -> liveness (recuperable, pas de famine).
-            // (Le sens OPPOSE ~180 n'est PAS un conflit : voies paralleles, exclu.)
-            bool crossingInBox = false;
-            {
-                const int        myVin  = getVehicleId();
-                const core::Vec2 interC = interAhead->getWorldCenter(tileSize);
-                for (const auto& other : agents) {
-                    if (!other || other.get() == this) continue;
-                    const float dH =
-                        std::abs(core::math::wrapDeg180(other->getHeading() - currentAngle));
-                    if (dH < 45.f || dH > 135.f) continue;   // garde le CROISE perpendiculaire
-                    const core::Vec2 op = other->getPosition();
-
-                    // (a) Deja DANS ma boite -> je cede, quel que soit son VIN.
-                    if (world.getIntersectionAt(op.x, op.y) == interAhead) {
-                        crossingInBox = true;
-                        break;
-                    }
-                    // (b) Departage des arrivees ~SIMULTANEES (aucun encore dedans) :
-                    // je cede a un contender croise EN MOUVEMENT vers ma boite avec un
-                    // VIN plus petit. Auto-correcteur : s'il s'arrete (cale), il cesse
-                    // d'etre un contender -> je ne lui cede plus (aucune famine).
-                    const int ov = other->getVehicleId();
-                    if (ov < 0 || ov >= myVin)        continue;   // pas prioritaire
-                    if (other->getSpeed() < 10.f)     continue;   // pas un contender actif
-                    const core::Vec2 dC = interC - op;
-                    const float distOC = dC.length();
-                    if (distOC > tileSize * 2.5f)     continue;   // pas proche de la boite
-                    const float oRad = other->getHeading() * core::math::DEG2RAD;
-                    const core::Vec2 oDir{ std::cos(oRad), std::sin(oRad) };
-                    if (distOC > 1.f &&
-                        (oDir.x * dC.x + oDir.y * dC.y) / distOC < 0.3f) continue; // s'eloigne
-                    crossingInBox = true;
-                    break;
-                }
-            }
-
-            const bool mayEnter = canPass && !exitBlocked && !crossingInBox;
+            // Note : pas de "gate VIN d'admission" en plus de keep-clear. Une telle
+            // garde sur-cedait aux files perpendiculaires queue-ees a gauche/droite,
+            // creant ses propres deadlocks. Le KEEP-CLEAR au couloir asymetrique
+            // (large dans la boite) capte deja correctement un corps perpendiculaire
+            // qui occupe physiquement ma trajectoire ; les policies (priorite, feux,
+            // STOP, P2P...) tranchent le droit de passage en amont. Les rares paires
+            // simultanees residuelles sont brisees par le filet anti-collision (VIN).
+            const bool mayEnter = canPass && !exitBlocked;
             const bool proceed  = mayEnter || (cannotStop && !isStopAhead);
 
             if (proceed) {
@@ -669,19 +654,6 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                     leader          = box;
                     leaderIsVehicle = false;
                     leaderFromBox   = true;
-                }
-            } else if (crossingInBox) {
-                // Un mouvement CROISE occupe la boite -> j'attends a MA ligne d'entree
-                // (ne pas ajouter un 2e corps perpendiculaire = pas de standoff).
-                core::behavior::LeaderInfo cx;
-                cx.present    = true;
-                cx.gap        = std::max(distToInter - getLength() / 2.f - 4.f, 0.f);
-                cx.speed      = 0.f;
-                cx.stopTarget = true;
-                if (!leader.present || cx.gap < leader.gap) {
-                    leader          = cx;
-                    leaderIsVehicle = false;
-                    leaderFromYield = true;   // diag : cede (conflit de boite)
                 }
             }
 
@@ -781,17 +753,19 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
             // voitures par-dessus les camions (longs) aux intersections. L'ordre
             // par VIN ne sert qu'a departager TANT QU'IL RESTE une marge.
             constexpr float kHardMin = 5.f;
-            // Le bris d'egalite par VIN ne vaut QUE pour un conflit EN MOUVEMENT (qui
-            // va liberer la zone). Un corps ~A L'ARRET dans ma trajectoire est un
-            // OBSTACLE, pas une negociation : je freine TOUJOURS, meme prioritaire.
-            // Sinon un vehicule a petit VIN fonce jusqu'a 5 px d'un vehicule deja
-            // ENGAGE et fige a la boite -> "un engage bloque l'autre" -> gridlock.
-            const bool otherMoving = other->getSpeed() > 12.f;
-            if (headingDiff >= 45.f && !overtakeHeadOn && bumper > kHardMin && otherMoving) {
+            // Bris d'egalite par VIN pour le conflit CROISE (ordre TOTAL -> casse
+            // tout cycle a N vehicules : le plus petit VIN ne cede jamais, brise le
+            // gel rotatif). S'applique aussi a un corps a l'arret : c'est CE bypass
+            // qui permet au plus petit VIN d'AVANCER (jusqu'a kHardMin) pour degager
+            // un standoff dans la boite. Sans lui, deux corps perpendiculaires
+            // figes restent figes pour toujours. Le garde 'bumper>kHardMin' borne
+            // l'avance : a chevauchement imminent on freine TOUJOURS (la priorite
+            // n'autorise pas a traverser un corps).
+            if (headingDiff >= 45.f && !overtakeHeadOn && bumper > kHardMin) {
                 const int myV = getVehicleId();
                 const int oV  = other->getVehicleId();
                 const bool otherHasPriority = (oV >= 0) && (myV < 0 || oV < myV);
-                if (!otherHasPriority) continue;             // mouvant + priorite + marge -> je passe
+                if (!otherHasPriority) continue;             // priorite + marge -> je passe
             }
 
             // Leader d'urgence : on retient le plus contraignant (plus petit gap).
