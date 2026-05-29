@@ -655,7 +655,7 @@ int main() {
                     launchVisualMc(vStrats[vIdx]);
             } else {
                 ImGui::SliderInt("Duree mesure (s)", &expDurationSec, 20, 180);
-                ImGui::SliderInt("Runs / point", &expRuns, 1, 5);
+                ImGui::SliderInt("Runs / point", &expRuns, 1, 50);
                 ImGui::TextDisabled("Strategies a comparer :");
                 ImGui::Checkbox("Prio. Fixe", &expStratFixed);  ImGui::SameLine();
                 ImGui::Checkbox("P2P", &expStratP2P);           ImGui::SameLine();
