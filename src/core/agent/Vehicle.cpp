@@ -560,14 +560,12 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                         if (sp >= laneLen) break;
                     }
                     if (sEnter >= 0.f && sExit > sEnter) {
-                        // FULL-BODY FIT : interdire l'engagement si ma carrosserie
-                        // ne tient pas en entier dans la boite + sortie. need
-                        // couvre longueur + s0 + petite marge. Si sExit + need
-                        // depasse la fin de la voie (cas degenere : route trop
-                        // courte apres la boite), on attend -- mieux vaut
-                        // patienter que se figer mi-engage.
+                        // FULL-BODY FIT : la fenetre couvre longueur + s0 +
+                        // marge apres la sortie. Si le trajet finit juste apres,
+                        // on borne a la destination : ce n'est pas une sortie
+                        // bouchee.
                         const float need = getLength() + idm.params().s0 + 4.f;
-                        if (sExit + need > laneLen) { exitBlocked = true; }
+                        const float blockTo = std::min(sExit + need, laneLen);
                         // Borne basse de la fenetre surveillee. Carrefour : depuis
                         // l'ENTREE (on veut la boite ELLE-MEME degagee). Rond-point :
                         // depuis la SORTIE seulement (on ignore l'arc circulant).
@@ -583,7 +581,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             ? currentLane->getPositionAt(std::min(blockFrom, laneLen))
                             : position;
                         const float winReach = isRoundabout
-                            ? (sExit + need - blockFrom) + 120.f
+                            ? (blockTo - blockFrom) + 120.f
                             : 250.f;
                         bool blocked = false;
                         for (const auto& other : agents) {
@@ -602,7 +600,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                             const core::Vec2 od = other->getPosition() - winAnchor;
                             if (od.x * od.x + od.y * od.y > winReach * winReach) continue;
                             const LaneProjection pr =
-                                currentLane->project(other->getPosition(), blockFrom, sExit + need);
+                                currentLane->project(other->getPosition(), blockFrom, blockTo);
                             if (!pr.valid) continue;
                             // Couloir HEADING-AWARE pour la portion DANS la boite, mais
                             // SEULEMENT si l'autre est PHYSIQUEMENT dans cette boite.
@@ -633,7 +631,7 @@ void Vehicle::computeDecision(const std::vector<std::unique_ptr<IAgent>>& agents
                                 laterMax = visionParams.laneCorridorHalf;
                             }
                             if (std::abs(pr.lateral) > laterMax) continue;
-                            if (pr.s >= blockFrom && pr.s <= sExit + need) { blocked = true; break; }
+                            if (pr.s >= blockFrom && pr.s <= blockTo) { blocked = true; break; }
                         }
                         constexpr float kFixedDt = 1.f / 60.f;
                         // KEEP-CLEAR ABSOLU : boite/sortie non degageable -> je
