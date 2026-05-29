@@ -1,7 +1,0 @@
-# Dependances de la couche d'analyse / rapport (notebooks). Non requis pour
-# compiler ou tester le moteur C++.
-jupyter
-nbconvert
-pandas
-matplotlib
-numpy
