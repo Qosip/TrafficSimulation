@@ -182,6 +182,7 @@ int main() {
     bool buildMode = false;
     bool showFlowDebug = false; // --- NOUVEAU : Variable d'état du bouton ---
     bool showDecisions = false; // Overlay pedagogique des decisions sur la sim
+    bool showVehicleIds = false;
     BuildTool currentTool = BuildTool::ROAD_CITY_50;
     int  roundaboutSide = 4;     // cote en tiles, PAIR (2,4,6,8). 2 = mini, 4 = anneau 4x4...
     bool isPaused = false;
@@ -816,6 +817,7 @@ int main() {
                 renderer.drawAgent(*agent);
                 renderer.drawAgentDebug(*agent);
                 if (showDecisions) renderer.drawAgentDecision(*agent);
+                if (showVehicleIds) renderer.drawAgentId(*agent);
             }
 
             // --- Apercu de construction (fantome + surbrillance de la tile) ---
@@ -1034,6 +1036,12 @@ int main() {
                 // Overlay pedagogique : montre la decision de CHAQUE vehicule
                 // (anneau colore + label CEDE/STOP/P2P/FEU/DOUBLE...) sur la sim.
                 ImGui::Checkbox("Afficher les decisions (overlay)", &showDecisions);
+
+                if (ImGui::Button(showVehicleIds ? "Masquer les IDs vehicules"
+                                                 : "Afficher les IDs vehicules",
+                                  ImVec2(-1.f, 25.f))) {
+                    showVehicleIds = !showVehicleIds;
+                }
 
                 if (buildMode) {
                     ImGui::TextColored(ImVec4(1.f, 1.f, 0.f, 1.f), "Outil de pose selectionne :");

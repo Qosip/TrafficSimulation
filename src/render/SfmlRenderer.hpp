@@ -28,6 +28,7 @@ public:
     // de l'agent (anneau colore + label : CEDE / STOP / P2P / FEU / DOUBLE...).
     // Concret a SfmlRenderer (hors interface) : appele a la demande par main.
     void drawAgentDecision(const IAgent& agent);
+    void drawAgentId(const IAgent& agent);
 
     void drawBuildFootprint(int gridX, int gridY, int wTiles, int hTiles,
                             float tileSize, core::Color fill) override;

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 #include "core/agent/AgentDebugSnapshot.hpp"
 #include "core/agent/IAgent.hpp"
@@ -633,6 +634,26 @@ void SfmlRenderer::drawAgentDecision(const IAgent& agent) {
         txt.setPosition(p.x, p.y - ringR - 9.f);
         target_.draw(txt);
     }
+}
+
+void SfmlRenderer::drawAgentId(const IAgent& agent) {
+    if (!fontLoaded_) return;
+
+    const int vin = agent.getVehicleId();
+    if (vin < 0) return;
+
+    const core::Vec2 p = agent.getPosition();
+    const core::Vec2 b = agent.getBodySize();
+    const float y = p.y - std::max(b.x, b.y) * 0.5f - 18.f;
+
+    sf::Text txt("#" + std::to_string(vin), font_, 12);
+    txt.setFillColor(sf::Color(245, 245, 245));
+    txt.setOutlineColor(sf::Color(0, 0, 0, 210));
+    txt.setOutlineThickness(2.f);
+    const sf::FloatRect bb = txt.getLocalBounds();
+    txt.setOrigin(bb.left + bb.width / 2.f, bb.top + bb.height / 2.f);
+    txt.setPosition(p.x, y);
+    target_.draw(txt);
 }
 
 } // namespace render
