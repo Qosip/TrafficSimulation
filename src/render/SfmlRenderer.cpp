@@ -213,11 +213,13 @@ void SfmlRenderer::drawIntersections(const World& world) {
                 const bool  isLarge = (tiles.size() > 4);
                 const float innerR  = isLarge ? std::max(0.f, outerR - ts) : 0.f;
 
-                // Cercle externe = bordure visible.
+                // Couronne de route circulaire : elle recouvre les coins de la
+                // pelouse carree de la grille, donc la trajectoire ne traverse
+                // plus visuellement des bouts d'herbe.
                 sf::CircleShape outer(outerR);
                 outer.setOrigin(outerR, outerR);
                 outer.setPosition(center);
-                outer.setFillColor(sf::Color(0, 0, 0, 0));    // transparent : laisse voir la chaussee
+                outer.setFillColor(toSfml(getRoadColor(RoadType::INTERSECTION)));
                 outer.setOutlineColor(sf::Color(220, 220, 220));
                 outer.setOutlineThickness(2.f);
                 target_.draw(outer);

@@ -620,6 +620,70 @@ void buildCityXXXXLCarsOnly(std::unique_ptr<World>& world, AgentVec& agents) {
     }
 }
 
+// Grande ville "realiste simple" : uniquement des voitures et des carrefours
+// classiques 2x2. Aucun rond-point, camion, P2P/AIM/ORCA/peloton : seulement les
+// modes qu'on retrouve dans la conduite ordinaire (feux, STOP, cedez, priorites).
+void buildHugeRealCarsSimpleIntersections(std::unique_ptr<World>& world,
+                                           AgentVec& agents) {
+    agents.clear();
+    constexpr int W = 112, H = 84;
+    world = std::make_unique<World>(W, H, TS);
+    World& w = *world;
+
+    const int rows[9] = {6, 14, 23, 31, 41, 50, 60, 69, 78};
+    const int cols[10] = {7, 17, 28, 39, 51, 62, 73, 84, 96, 105};
+    constexpr int nR = 9, nC = 10;
+    for (int i = 0; i < nR; ++i) buildHRoad(w, rows[i], 0, W - 1);
+    for (int j = 0; j < nC; ++j) buildVRoad(w, cols[j], 0, H - 1);
+
+    const RegulationType realRegs[5] = {
+        RegulationType::TRAFFIC_LIGHT,
+        RegulationType::PRIORITY_RIGHT,
+        RegulationType::STOP,
+        RegulationType::YIELD,
+        RegulationType::FIXED_PRIORITY
+    };
+    int id = 1;
+    for (int ri = 0; ri < nR; ++ri) {
+        for (int ci = 0; ci < nC; ++ci) {
+            const int pattern = (ri * 3 + ci * 2 + (ri + ci) / 3) % 5;
+            buildCrossroad(w, cols[ci], rows[ri], id++, realRegs[pattern]);
+        }
+    }
+
+    std::vector<core::TileCoord> roadTiles;
+    for (int x = 0; x < W; ++x)
+        for (int y = 0; y < H; ++y) {
+            const RoadType rt = w.getTile(x, y).roadType;
+            if (rt != RoadType::NONE && rt != RoadType::INTERSECTION)
+                roadTiles.push_back({x, y});
+        }
+
+    core::Rng rng(0xB16C4175ULL);
+    std::unordered_set<long long> usedStart;
+    auto key = [W](core::TileCoord t) { return (long long)t.y * W + t.x; };
+
+    constexpr int kTargetVehicles = 850;
+    int spawned = 0, guard = 0;
+    while (spawned < kTargetVehicles && guard < kTargetVehicles * 14) {
+        ++guard;
+        const auto a = roadTiles[rng.uniformInt(0, (int)roadTiles.size() - 1)];
+        const auto b = roadTiles[rng.uniformInt(0, (int)roadTiles.size() - 1)];
+        if (usedStart.count(key(a))) continue;
+
+        const auto path = AStarPlanner::findPath(w, a, b);
+        if ((int)path.size() < 14) continue;
+
+        usedStart.insert(key(a));
+        const int dice = rng.uniformInt(0, 99);
+        const Personality p = (dice < 20) ? prof::aggressiveDriver()
+                            : (dice < 50) ? prof::calmDriver()
+                                          : prof::normalDriver();
+        addCar(agents, w, a.x, a.y, b.x, b.y, p);
+        ++spawned;
+    }
+}
+
 // =============================================================================
 // Catalogue (ordre = ordre d'affichage)
 // =============================================================================
@@ -773,6 +837,11 @@ std::vector<ScenarioDef> makeCatalog() {
         "calme). Stress-test des fixes anti-wedge en haute densite -- aucun "
         "blocage mutuel ne doit subsister plus de ~1 sec.",
         buildCityXXXXLCarsOnly);
+    add("GROSSE ville reelle : voitures + carrefours simples (~850)", "Massif",
+        "Grande ville 112x84 avec uniquement des voitures et des carrefours 2x2 "
+        "classiques : feux, STOP, cedez-le-passage, priorite a droite et axe "
+        "prioritaire. Aucun camion, rond-point, P2P, AIM, ORCA ou peloton.",
+        buildHugeRealCarsSimpleIntersections);
 
     return cat;
 }

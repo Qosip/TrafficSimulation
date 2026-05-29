@@ -176,7 +176,7 @@ int main() {
 
     // Wave 5 : pas de simulation fixe. Decouple le solver IDM du framerate.
     constexpr float FIXED_DT = 1.0f / 60.0f;  // 60 Hz logique
-    constexpr int   MAX_SUBSTEPS = 5;         // anti-spirale en cas de stall
+    constexpr int   MAX_SUBSTEPS = 12;        // permet l'acceleration jusqu'a ~x10
     float           simAccumulator = 0.f;
 
     bool buildMode = false;
@@ -906,7 +906,7 @@ int main() {
                 }
                 ImGui::Separator();
                 ImGui::Checkbox("Pause Generale", &isPaused);
-                ImGui::SliderFloat("Vitesse Sim", &simSpeedFactor, 0.2f, 3.0f, "%.1fx");
+                ImGui::SliderFloat("Vitesse Sim", &simSpeedFactor, 0.2f, 10.0f, "%.1fx");
                 ImGui::Separator();
                 ImGui::Checkbox("Multithreading (decisions)", &useMultithreading);
                 ImGui::TextDisabled("Pool : %u threads. Actif si >= %d agents.",

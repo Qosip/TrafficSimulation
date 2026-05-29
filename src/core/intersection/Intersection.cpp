@@ -168,7 +168,20 @@ bool Intersection::containsWorldPoint(core::Vec2 p, float ts) const {
     if (ts <= 0.f) return false;
     const int gridX = static_cast<int>(std::floor(p.x / ts));
     const int gridY = static_cast<int>(std::floor(p.y / ts));
-    return coversTile(gridX, gridY);
+    if (coversTile(gridX, gridY)) return true;
+
+    if (type == RegulationType::ROUNDABOUT) {
+        const core::Vec2 c = getWorldCenter(ts);
+        const float outerR = getOuterRadius(ts);
+        const bool large = coveredTiles.size() > 4;
+        const float innerR = large ? std::max(0.f, outerR - ts) : 0.f;
+        const float margin = ts * 0.08f;
+        const float d = (p - c).length();
+        return d <= outerR + margin &&
+               d >= std::max(0.f, innerR - margin);
+    }
+
+    return false;
 }
 
 int                                  Intersection::getId()           const { return id; }

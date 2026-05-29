@@ -77,7 +77,12 @@ const Tile& World::getTile(int gridX, int gridY) const {
 float World::getSpeedLimitAt(float worldX, float worldY) const {
     const int gx = static_cast<int>(worldX / tileSize);
     const int gy = static_cast<int>(worldY / tileSize);
-    return getRoadSpeedLimit(getTile(gx, gy).roadType);
+    RoadType type = getTile(gx, gy).roadType;
+    if (type != RoadType::INTERSECTION &&
+        getIntersectionAt(worldX, worldY) != nullptr) {
+        type = RoadType::INTERSECTION;
+    }
+    return getRoadSpeedLimit(type);
 }
 
 std::vector<core::TileCoord> World::getValidNeighbors(int x, int y) const {
@@ -197,13 +202,9 @@ Approach::Direction World::getApproachDirection(float headingDeg) const {
 }
 
 const Intersection* World::getIntersectionAt(float worldX, float worldY) const {
-    const int gridX = static_cast<int>(worldX / tileSize);
-    const int gridY = static_cast<int>(worldY / tileSize);
-
+    const core::Vec2 p{worldX, worldY};
     for (const auto& inter : intersections) {
-        for (const auto& tile : inter.getCoveredTiles()) {
-            if (tile.x == gridX && tile.y == gridY) return &inter;
-        }
+        if (inter.containsWorldPoint(p, tileSize)) return &inter;
     }
     return nullptr;
 }
